@@ -4,28 +4,27 @@ FROM python:3.9-slim
 # 2. Set folder kerja
 WORKDIR /app
 
-# 3. Install tools dasar Linux
+# 3. Update pip & Install tools dasar
+# HAPUS 'software-properties-common' biar gak error
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. Copy requirements.txt DULUAN
-# (Penting: Pastikan file 'requirements.txt' sudah ada di folder project kamu!)
+# 4. Copy requirements.txt
 COPY requirements.txt .
 
 # 5. Install Library Python
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# 6. Copy seluruh kodingan sisanya
+# 6. Copy seluruh kodingan
 COPY . .
 
-# 7. Buka port 8501
+# 7. Buka port
 EXPOSE 8501
 
-# 8. Healthcheck (Cek kesehatan aplikasi)
+# 8. Cek kesehatan app
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
 
 # 9. Jalankan aplikasi
