@@ -1,51 +1,41 @@
-# ==========================================
-# STAGE 1: Builder (Dapur Kotor)
-# ==========================================
-# Kita pakai image slim untuk membangun fondasi
-FROM python:3.9-slim as builder
+# 1. Gunakan Python 3.13 Slim (Versi Terbaru & Paling Ringan)
+FROM python:3.13-slim
 
+# 2. Set Environment Variables
+# (PYTHONDONTWRITEBYTECODE: Biar ga ada file .pyc sampah)
+# (PYTHONUNBUFFERED: Biar log langsung muncul di terminal Fly.io)
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# 3. Set Folder Kerja di dalam container
 WORKDIR /app
 
-# Install compiler (build-essential) CUMA di tahap ini.
-# Ini dibutuhkan untuk meng-compile beberapa library Python (misal: pandas/numpy)
+# 4. Install Tools Dasar System
+# (build-essential: kadang butuh buat compile library python tertentu)
+# (curl: wajib buat Healthcheck)
+# rm -rf: membersihkan cache apt biar size image tetep kecil
 RUN apt-get update && apt-get install -y \
     build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-
-# Install library ke folder khusus (--user) biar gampang dipindah nanti
-# --no-warn-script-location biar lognya gak berisik
-RUN pip install --no-cache-dir --user --no-warn-script-location -r requirements.txt
-
-
-# ==========================================
-# STAGE 2: Final Image (Meja Saji Bersih)
-# ==========================================
-# Kita mulai lagi dari NOL dengan image slim yang bersih
-FROM python:3.9-slim
-
-WORKDIR /app
-
-# Di tahap akhir, kita CUMA butuh 'curl' untuk healthcheck.
-# Compiler 'build-essential' sudah TIDAK KITA INSTALL LAGI disini. Hemat ratusan MB!
-RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# COPY hasil installan Python dari Stage 1 (Builder) tadi
-# Kita pindahkan dari /root/.local di builder ke /root/.local di image final
-COPY --from=builder /root/.local /root/.local
+# 5. Copy Requirements DULUAN (Teknik Caching Docker)
+# Kalau code berubah tapi requirements ga berubah, docker ga perlu install ulang
+COPY requirements.txt .
 
-# Beri tahu sistem agar membaca program dari folder hasil copy tadi
-ENV PATH=/root/.local/bin:$PATH
+# 6. Install Library Python
+# --no-cache-dir: Biar pip ga nyimpen file mentahan (Hemat space)
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy kodingan aplikasimu
+# 7. Copy Seluruh Kodingan Aplikasi
 COPY . .
 
-# Expose port & Healthcheck (Standar)
+# 8. Buka Port Default Streamlit
 EXPOSE 8501
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
 
-# Jalankan aplikasi
+# 9. Healthcheck (Penting buat Fly.io ngecek app hidup/mati)
+HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
+
+# 10. Jalankan Aplikasi
 CMD ["streamlit", "run", "main.py", "--server.address=0.0.0.0", "--server.port=8501"]
