@@ -27,6 +27,9 @@ COPY requirements.txt .
 # --no-cache-dir: Biar pip ga nyimpen file mentahan (Hemat space)
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
+    
+# Tambahkan ini di Dockerfile
+RUN mkdir -p .streamlit && touch .streamlit/secrets.toml
 
 # 7. Copy Seluruh Kodingan Aplikasi
 COPY . .
