@@ -2,6 +2,7 @@ import streamlit as st
 # import pandas as pd  <-- SUDAH DIHAPUS (NO PANDAS VERSION)
 from uuid import uuid4
 from datetime import datetime
+import time  # <--- TAMBAHKAN INI
 
 # Import module internal
 from modules import db
@@ -249,45 +250,63 @@ def _generate_pdf_state(subtotal, cashback, final_total, items):
 
 
 def _render_action_buttons():
-    pdf_bytes = st.session_state["generated_pdf_bytes"]
-    inv_no = st.session_state["inv_no"]
+    # Ambil data dari state
+    pdf_bytes = st.session_state.get("generated_pdf_bytes")
+    inv_no = st.session_state.get("inv_no", "INV_001")
     client_email = st.session_state.get("inv_client_email", "")
     
-    st.success("✅ PDF Siap!")
+    st.success("✨ PDF Ready for Export!")
     
     with st.container(border=True):
-        st.markdown("#### 📤 Pilih Metode Kirim")
+        st.markdown("#### 📤 Delivery Methods")
         col_dl, col_drive = st.columns(2)
         
+        # 1. Real Download (Tetap fungsi asli biar bisa dicek PDF-nya)
         with col_dl:
             st.download_button(
-                label="📥 Download Lokal",
+                label="📥 Download Locally",
                 data=pdf_bytes,
                 file_name=f"{inv_no.replace('/', '_')}.pdf",
                 mime="application/pdf",
                 use_container_width=True
             )
 
+        # 2. Mock Google Drive (The "Prank" Button)
         with col_drive:
             if st.button("☁️ Save & Share Email", type="primary", use_container_width=True):
                 if not client_email:
-                    st.error("⚠️ Masukkan email dulu!")
+                    st.warning("⚠️ Please enter a client email first!")
                 else:
-                    with st.spinner("Mengupload ke Drive & Mengirim Email..."):
-                        pdf_bytes.seek(0)
-                        
-                        success, link, msg = gdrive.upload_and_share(
-                            pdf_bytes, 
-                            f"{inv_no.replace('/', '_')}.pdf", 
-                            client_email
-                        )
-                        
-                        if success:
-                            st.success("✅ Terkirim!")
-                            st.caption(f"Status: {msg}")
-                            st.link_button("📂 Lihat di Drive", url=link)
-                        else:
-                            st.error(f"Gagal: {msg}")
+                    # Animasi loading pura-pura
+                    progress_text = "Connecting to Google Cloud..."
+                    my_bar = st.progress(0, text=progress_text)
+                    
+                    # Tahap 1: Pura-pura upload
+                    time.sleep(0.8)
+                    my_bar.progress(40, text="Uploading PDF to secure storage...")
+                    
+                    # Tahap 2: Pura-pura share email
+                    time.sleep(1.0)
+                    my_bar.progress(85, text=f"Attempting to notify {client_email}...")
+                    
+                    # Selesai: Munculin pesan Coming Soon
+                    time.sleep(0.7)
+                    my_bar.empty()
+                    
+                    st.info("🚧 **Feature Coming Soon!**")
+                    st.markdown(
+                        f"""
+                        <div style="background-color:rgba(255, 75, 75, 0.1); padding:15px; border-radius:10px; border:1px dashed #ff4b4b;">
+                            <p style="margin:0; font-size:14px; color:#ff4b4b;">
+                                <b>Under Construction:</b> Integrasi Google Drive & SMTP Email 
+                                sedang dalam tahap pengembangan akhir. Untuk saat ini, silakan gunakan 
+                                tombol <b>Download Lokal</b> di sebelah kiri.
+                            </p>
+                        </div>
+                        """, 
+                        unsafe_allow_html=True
+                    )
+                    st.toast("Stay tuned for the Cloud update! 🚀")
 
 
 # ==========================================
