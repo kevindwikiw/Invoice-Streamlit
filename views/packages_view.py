@@ -1,5 +1,6 @@
 import streamlit as st
-import pandas as pd
+# HAPUS IMPORT PANDAS
+# import pandas as pd 
 from modules import db
 from ui.components import page_header, section, danger_container
 from ui.formatters import rupiah
@@ -7,11 +8,12 @@ from ui.formatters import rupiah
 # =========================================================
 # 0) CONSTANTS
 # =========================================================
-CATEGORIES = ["Utama", "Bonus"]          # add later: ["Utama","Bonus","Promo"]
+CATEGORIES = ["Utama", "Bonus"]
 CATEGORY_ALL = "All"
 
+# Format Sort: (key_dictionary, is_ascending)
 SORT_OPTIONS = {
-    "Newest": ("id", False),
+    "Newest": ("id", False),          # ID besar = baru (Descending)
     "Price: High → Low": ("price", False),
     "Price: Low → High": ("price", True),
     "Name: A → Z": ("name", True),
@@ -24,39 +26,45 @@ DESC_PREVIEW_LINES = 3
 
 
 # =========================================================
-# 1) DATA HELPERS
+# 1) DATA HELPERS (PURE PYTHON VERSION)
 # =========================================================
-def _safe_load_data() -> pd.DataFrame:
-    """Load packages (cached by db.py) + normalize schema."""
+def _safe_load_data() -> list:
+    """Load packages and convert to list of dicts."""
     try:
-        df = db.load_packages()
+        # Asumsi db.load_packages() mengembalikan list of dicts
+        # Kalau dia balikin Pandas DataFrame, kita convert manual:
+        raw_data = db.load_packages()
+        
+        # Cek jika raw_data adalah DataFrame (jaga-jaga kalau db.py belum diubah)
+        if hasattr(raw_data, 'to_dict'):
+            data = raw_data.to_dict('records')
+        else:
+            data = raw_data
+            
     except Exception:
-        df = pd.DataFrame()
+        data = []
 
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["id", "name", "price", "category", "description"])
+    if not data:
+        return []
 
-    df = df.copy()
-    if "category" not in df.columns:
-        df["category"] = CATEGORIES[0]
-    if "description" not in df.columns:
-        df["description"] = ""
-
-    df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0)
-    df["id"] = pd.to_numeric(df["id"], errors="coerce").fillna(0).astype(int)
-    df["category"] = df["category"].fillna(CATEGORIES[0])
-    df["description"] = df["description"].fillna("")
-    df["name"] = df["name"].fillna("")
-    return df
+    # Normalize data (fillna manual)
+    cleaned_data = []
+    for item in data:
+        # Pastikan item adalah dictionary
+        if not isinstance(item, dict): continue
+        
+        cleaned_data.append({
+            "id": int(item.get("id") or 0),
+            "name": str(item.get("name") or ""),
+            "price": float(item.get("price") or 0),
+            "category": str(item.get("category") or CATEGORIES[0]),
+            "description": str(item.get("description") or "")
+        })
+        
+    return cleaned_data
 
 
 def _desc_meta(text: str, max_lines: int = DESC_PREVIEW_LINES):
-    """
-    Return:
-      preview_html: bullet lines up to max_lines
-      more_count: int
-      full_lines: list[str]
-    """
     lines = [x.strip() for x in str(text or "").split("\n") if x.strip()]
     if not lines:
         return "", 0, []
@@ -67,24 +75,31 @@ def _desc_meta(text: str, max_lines: int = DESC_PREVIEW_LINES):
     return preview_html, more_count, lines
 
 
-def _apply_filters(df: pd.DataFrame, q: str, cat: str) -> pd.DataFrame:
-    out = df
-    if q:
-        out = out[out["name"].str.contains(q, case=False, na=False)]
+def _apply_filters(data: list, q: str, cat: str) -> list:
+    filtered = data
+    
+    # Filter by Category
     if cat != CATEGORY_ALL:
-        out = out[out["category"] == cat]
-    return out
+        filtered = [d for d in filtered if d["category"] == cat]
+    
+    # Filter by Search Query (Name)
+    if q:
+        q_lower = q.lower()
+        filtered = [d for d in filtered if q_lower in d["name"].lower()]
+        
+    return filtered
 
 
-def _apply_sort(df: pd.DataFrame, sort_label: str) -> pd.DataFrame:
+def _apply_sort(data: list, sort_label: str) -> list:
     col, asc = SORT_OPTIONS.get(sort_label, ("id", False))
-    if col not in df.columns:
-        return df
-    return df.sort_values(col, ascending=asc)
+    
+    # Python Sort (List of Dicts)
+    # reverse=True artinya Descending (Kebalikan dari logic Pandas 'ascending')
+    return sorted(data, key=lambda x: x.get(col, 0), reverse=not asc)
 
 
 # =========================================================
-# 2) FORM (EDIT: NO DELETE BUTTON, biar ga double)
+# 2) FORM
 # =========================================================
 def _render_package_form(data: dict | None = None, key_prefix: str = "pkg"):
     is_edit = data is not None
@@ -105,7 +120,12 @@ def _render_package_form(data: dict | None = None, key_prefix: str = "pkg"):
 
         c1, c2 = st.columns([1, 1])
         with c1:
-            cat_idx = CATEGORIES.index(defaults["cat"]) if defaults["cat"] in CATEGORIES else 0
+            # Handle index error safety
+            try:
+                cat_idx = CATEGORIES.index(defaults["cat"])
+            except ValueError:
+                cat_idx = 0
+                
             category = st.selectbox("Category", CATEGORIES, index=cat_idx, key=f"{key_prefix}_cat")
         with c2:
             price = st.number_input(
@@ -150,7 +170,7 @@ def _render_package_form(data: dict | None = None, key_prefix: str = "pkg"):
 
 
 # =========================================================
-# 3) DIALOGS (ESC/CANCEL SAFE via modal pop)
+# 3) DIALOGS
 # =========================================================
 @st.dialog("➕ Add New Package")
 def show_add_dialog():
@@ -166,7 +186,7 @@ def show_add_dialog():
         try:
             db.add_package(payload["name"], payload["price"], payload["category"], payload["description"])
         except Exception as e:
-            st.error("Gagal menyimpan package. Coba ulangi.")
+            st.error("Gagal menyimpan package.")
             st.caption(f"Debug: {e}")
             return
 
@@ -189,7 +209,7 @@ def show_edit_dialog(row_data: dict):
         try:
             db.update_package(pkg_id, payload["name"], payload["price"], payload["category"], payload["description"])
         except Exception as e:
-            st.error("Gagal menyimpan perubahan. Coba ulangi.")
+            st.error("Gagal menyimpan perubahan.")
             st.caption(f"Debug: {e}")
             return
 
@@ -225,7 +245,7 @@ def show_delete_dialog(row_data: dict):
                 try:
                     db.delete_package(pkg_id)
                 except Exception as e:
-                    st.error("Gagal delete package. Coba ulangi.")
+                    st.error("Gagal delete package.")
                     st.caption(f"Debug: {e}")
                     return
 
@@ -234,12 +254,12 @@ def show_delete_dialog(row_data: dict):
 
 
 # =========================================================
-# 4) GRID
+# 4) GRID (PURE PYTHON)
 # =========================================================
-def _render_grid(df: pd.DataFrame, cols_count: int, page_size: int = PAGE_SIZE_DEFAULT):
+def _render_grid(data: list, cols_count: int, page_size: int = PAGE_SIZE_DEFAULT):
     st.session_state.setdefault("_pkg_page", 1)
 
-    total = len(df)
+    total = len(data)
     if total == 0:
         st.info("No results.")
         return
@@ -247,6 +267,7 @@ def _render_grid(df: pd.DataFrame, cols_count: int, page_size: int = PAGE_SIZE_D
     max_page = max(1, (total + page_size - 1) // page_size)
     st.session_state["_pkg_page"] = min(st.session_state["_pkg_page"], max_page)
 
+    # Navigation UI
     p1, p2, p3 = st.columns([1, 2, 1])
     with p1:
         if st.button("← Prev", use_container_width=True, disabled=(st.session_state["_pkg_page"] <= 1)):
@@ -262,18 +283,21 @@ def _render_grid(df: pd.DataFrame, cols_count: int, page_size: int = PAGE_SIZE_D
             st.session_state["_pkg_page"] += 1
             st.rerun()
 
+    # Slice List manually
     start = (st.session_state["_pkg_page"] - 1) * page_size
     end = start + page_size
-    page_df = df.iloc[start:end]
+    page_data = data[start:end]
 
     cols = st.columns(cols_count)
-    for idx, row in enumerate(page_df.itertuples(index=False)):
+    
+    # Loop over list of dicts (bukan itertuples lagi)
+    for idx, row in enumerate(page_data):
         with cols[idx % cols_count]:
-            is_main = (row.category == CATEGORIES[0])
+            is_main = (row['category'] == CATEGORIES[0])
             badge_class = "badge-main" if is_main else "badge-addon"
             badge_text = "◆ MAIN" if is_main else "✨ ADD-ON"
 
-            preview_html, more, full_lines = _desc_meta(row.description, max_lines=DESC_PREVIEW_LINES)
+            preview_html, more, full_lines = _desc_meta(row['description'], max_lines=DESC_PREVIEW_LINES)
             full_html = "".join([f"<div class='desc-tooltip-line'>• {ln}</div>" for ln in full_lines])
 
             tooltip_html = ""
@@ -299,8 +323,8 @@ def _render_grid(df: pd.DataFrame, cols_count: int, page_size: int = PAGE_SIZE_D
                     <span class="badge {badge_class}">{badge_text}</span>
                   </div>
 
-                  <div class="mini-title">{row.name}</div>
-                  <div class="mini-price">{rupiah(row.price)}</div>
+                  <div class="mini-title">{row['name']}</div>
+                  <div class="mini-price">{rupiah(row['price'])}</div>
 
                   <div class="mini-body">
                     {details_html}
@@ -317,14 +341,14 @@ def _render_grid(df: pd.DataFrame, cols_count: int, page_size: int = PAGE_SIZE_D
 
             a1, a2 = st.columns([1, 1])
             with a1:
-                if st.button("✏️ Edit", key=f"grid_edit_{row.id}", use_container_width=True):
-                    st.session_state["_pkg_modal"] = ("edit", int(row.id))
+                if st.button("✏️ Edit", key=f"grid_edit_{row['id']}", use_container_width=True):
+                    st.session_state["_pkg_modal"] = ("edit", int(row['id']))
                     st.rerun()
 
             with a2:
-                with danger_container(key=f"danger_card_{row.id}"):
-                    if st.button("🗑️ Delete", key=f"grid_del_{row.id}", use_container_width=True):
-                        st.session_state["_pkg_modal"] = ("delete", int(row.id))
+                with danger_container(key=f"danger_card_{row['id']}"):
+                    if st.button("🗑️ Delete", key=f"grid_del_{row['id']}", use_container_width=True):
+                        st.session_state["_pkg_modal"] = ("delete", int(row['id']))
                         st.rerun()
 
             st.write("")
@@ -339,23 +363,23 @@ def render_page():
         "Kelola katalog harga dengan rapi — konsisten nama, harga, dan itemnya.",
     )
 
-    df = _safe_load_data()
+    data = _safe_load_data() # Sekarang balikin List, bukan DataFrame
 
-    # IMPORTANT:
-    # modal state dikonsumsi (pop) sebelum panggil dialog,
-    # jadi ESC/CANCEL tidak bikin modal kebuka lagi di rerun berikutnya.
+    # Modal handling
     modal = st.session_state.pop("_pkg_modal", None)
     if modal:
         mode, pkg_id = modal
         if mode == "add":
             show_add_dialog()
         elif mode in ("edit", "delete") and isinstance(pkg_id, int):
-            row = df[df["id"] == pkg_id]
-            if not row.empty:
+            # Cari data manual di list (filter)
+            found_rows = [d for d in data if d["id"] == pkg_id]
+            if found_rows:
+                row_dict = found_rows[0] # Sudah dict, gak perlu to_dict()
                 if mode == "edit":
-                    show_edit_dialog(row.iloc[0].to_dict())
+                    show_edit_dialog(row_dict)
                 else:
-                    show_delete_dialog(row.iloc[0].to_dict())
+                    show_delete_dialog(row_dict)
 
     st.write("")
 
@@ -380,16 +404,17 @@ def render_page():
         st.session_state["_pkg_sig"] = sig
         st.session_state["_pkg_page"] = 1
 
-    filtered = _apply_filters(df, q, cat)
-    filtered = _apply_sort(filtered, sort)
+    # Apply Logic Manual (List Comprehension)
+    filtered_data = _apply_filters(data, q, cat)
+    sorted_data = _apply_sort(filtered_data, sort)
 
-    st.caption(f"📌 Showing **{len(filtered)}** of **{len(df)}** packages.")
+    st.caption(f"📌 Showing **{len(sorted_data)}** of **{len(data)}** packages.")
     st.write("")
 
     section("✨ Catalog Cards")
 
-    if filtered.empty:
+    if not sorted_data:
         st.info("No packages match your search. Coba keyword/kategori lain.")
         return
 
-    _render_grid(filtered, cols_count=cols_count, page_size=PAGE_SIZE_DEFAULT)
+    _render_grid(sorted_data, cols_count=cols_count, page_size=PAGE_SIZE_DEFAULT)
