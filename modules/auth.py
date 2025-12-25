@@ -20,23 +20,31 @@ except ImportError:
 # =========================================================
 def _get_secrets():
     """Fetching secrets from st.secrets (local) or Environment Variables (Fly.io)."""
-    def get_val(key, default=None):
-        # Prioritas: 1. st.secrets, 2. OS Environment
+    # Fungsi pembantu agar tidak trigger warning 'No secrets found'
+    def safe_get(key):
+        # 1. Cek OS Environment dulu (Fly.io Secrets) - Paling cepat & diam
+        val = os.environ.get(key)
+        if val: return val
+        
+        # 2. Kalau di lokal, baru cek st.secrets
         try:
-            if key in st.secrets: return st.secrets[key]
-        except: pass
-        return os.environ.get(key, default)
+            if key in st.secrets:
+                return st.secrets[key]
+        except:
+            pass
+        return None
 
-    return {
-        "user": get_val("AUTH_USERNAME", "admin"),
-        "hash": get_val("AUTH_PASSWORD_HASH", ""),
-        "key": get_val("AUTH_COOKIE_SECRET", ""),
-        "days": int(get_val("AUTH_COOKIE_DAYS", 14)),
-        "token_name": get_val("AUTH_COOKIE_NAME", "admin_auth_token"),
-        "boot_wait": float(get_val("AUTH_COOKIE_BOOT_WAIT", 2.5)),
-        "boot_sleep": float(get_val("AUTH_COOKIE_BOOT_SLEEP", 0.12)),
-        "idle_timeout_min": int(get_val("AUTH_IDLE_TIMEOUT_MIN", 30)),
+    conf = {
+        "user": safe_get("AUTH_USERNAME") or "admin",
+        "hash": safe_get("AUTH_PASSWORD_HASH") or "",
+        "key": safe_get("AUTH_COOKIE_SECRET") or "",
+        "days": int(safe_get("AUTH_COOKIE_DAYS") or 14),
+        "token_name": safe_get("AUTH_COOKIE_NAME") or "admin_auth_token",
+        "boot_wait": float(safe_get("AUTH_COOKIE_BOOT_WAIT") or 2.5),
+        "boot_sleep": float(safe_get("AUTH_COOKIE_BOOT_SLEEP") or 0.12),
+        "idle_timeout_min": int(safe_get("AUTH_IDLE_TIMEOUT_MIN") or 30),
     }
+    return conf
 
 @st.cache_resource
 def get_cookie_manager():
@@ -196,4 +204,3 @@ def show_logout_dialog():
 def logout_button():
     if st.sidebar.button("🚪 Sign Out", use_container_width=True):
         show_logout_dialog()
-
