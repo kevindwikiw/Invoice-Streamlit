@@ -4,296 +4,189 @@ import hmac
 import base64
 import hashlib
 import secrets
-
+import os
+from datetime import datetime, timedelta
 import streamlit as st
 import extra_streamlit_components as stx
 
+# Internal UI components
+try:
+    from ui.components import danger_container
+except ImportError:
+    danger_container = None
 
 # =========================================================
-# 0) SECRETS
+# A. CONFIGURATION
 # =========================================================
-def _get_auth_secrets():
-    a = st.secrets.get("auth", {})
+def _get_secrets():
+    """Flat secret fetching (st.secrets or Environment Variables)."""
+    get = lambda k, d: st.secrets.get(k, os.getenv(k, d))
     return {
-        "username": a.get("username", "admin"),
-        "password_hash": a.get("password_hash", ""),
-        "cookie_secret": a.get("cookie_secret", ""),
-        "cookie_days": int(a.get("cookie_days", 14)),
+        "user": get("AUTH_USERNAME", "admin"),
+        "hash": get("AUTH_PASSWORD_HASH", ""),
+        "key": get("AUTH_COOKIE_SECRET", ""),
+        "days": int(get("AUTH_COOKIE_DAYS", 14)),
+        "token_name": get("AUTH_COOKIE_NAME", "admin_auth_token"),
+        "boot_wait": float(get("AUTH_COOKIE_BOOT_WAIT", 2.5)),
+        "boot_sleep": float(get("AUTH_COOKIE_BOOT_SLEEP", 0.12)),
+        "idle_timeout_min": int(get("AUTH_IDLE_TIMEOUT_MIN", 30)), # Auto logout after 30 mins
     }
 
-
-# =========================================================
-# 1) COOKIE MANAGER (cached)
-# =========================================================
 @st.cache_resource
-def get_manager():
-    # Key harus statis string, jangan pakai random
-    return stx.CookieManager(key="system_auth_manager")
+def get_cookie_manager():
+    return stx.CookieManager(key="prod_auth_manager_v2")
 
-cookie_manager = get_manager()
-COOKIE_NAME = "admin_token"
-
-
-def _cookie_set(name: str, value: str, expires_at: int | None, key: str):
-    """
-    extra_streamlit_components CookieManager versi beda bisa beda param.
-    Kita handle best-effort.
-    """
-    try:
-        cookie_manager.set(name, value, expires_at=expires_at, key=key)
-        return
-    except TypeError:
-        pass
-    except Exception:
-        pass
-
-    try:
-        cookie_manager.set(name, value, key=key)
-    except Exception:
-        pass
-
-
-def _cookie_delete(name: str, key: str):
-    """
-    Delete best-effort, kalau gagal paksa expire.
-    """
-    try:
-        cookie_manager.delete(name, key=key)
-        return
-    except Exception:
-        pass
-
-    # fallback: force expire
-    _cookie_set(name, "", expires_at=int(time.time()) - 10, key=f"{key}_expire")
-
+cookie_manager = get_cookie_manager()
 
 # =========================================================
-# 2) PASSWORD HASH (PBKDF2-SHA256)
-# Stored format:
-#   pbkdf2_sha256$iterations$salt$hash_b64
+# B. CRYPTO UTILS
 # =========================================================
-def _pbkdf2_hash(password: str, salt: str, iterations: int) -> str:
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
-    return base64.urlsafe_b64encode(dk).decode("utf-8").rstrip("=")
+def _hash_pw(password: str, salt: str, iters: int) -> str:
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), iters)
+    return base64.urlsafe_b64encode(dk).decode().rstrip("=")
 
-
-def verify_password(password: str, stored: str) -> bool:
+def _verify_pw(password: str, stored: str) -> bool:
     try:
-        alg, iters, salt, h = stored.split("$", 3)
-        if alg != "pbkdf2_sha256":
-            return False
-        iters = int(iters)
-        calc = _pbkdf2_hash(password, salt, iters)
-        return hmac.compare_digest(calc, h)
-    except Exception:
-        return False
+        if not stored or "$" not in stored: return False
+        _, iters, salt, h = stored.split("$", 3)
+        return hmac.compare_digest(_hash_pw(password, salt, int(iters)), h)
+    except: return False
 
+def _create_token(user: str, key: str, days: int) -> str:
+    exp = int(time.time()) + (days * 86400)
+    msg = f"v1|{user}|{exp}|{secrets.token_urlsafe(16)}"
+    sig = hmac.new(key.encode(), msg.encode(), hashlib.sha256).digest()
+    return f"{msg}|{base64.urlsafe_b64encode(sig).decode().rstrip('=')}"
 
-# Optional helper (kalau suatu saat mau generate hash via python)
-def generate_password_hash(password: str, iterations: int = 260000) -> str:
-    salt = secrets.token_urlsafe(16)
-    h = _pbkdf2_hash(password, salt, iterations)
-    return f"pbkdf2_sha256${iterations}${salt}${h}"
-
-
-# =========================================================
-# 3) SIGNED COOKIE TOKEN (HMAC)
-# token format: v1|username|exp_epoch|nonce|sig
-# =========================================================
-def _sign(msg: str, secret_key: str) -> str:
-    sig = hmac.new(secret_key.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(sig).decode("utf-8").rstrip("=")
-
-
-def _make_token(username: str, secret_key: str, ttl_seconds: int) -> str:
-    exp = int(time.time()) + ttl_seconds
-    nonce = secrets.token_urlsafe(12)
-    msg = f"v1|{username}|{exp}|{nonce}"
-    sig = _sign(msg, secret_key)
-    return f"{msg}|{sig}"
-
-
-def _verify_token(token: str, secret_key: str) -> str | None:
+def _validate_token(token: str, key: str) -> str | None:
     try:
-        parts = token.split("|")
-        if len(parts) != 5:
-            return None
-
-        ver, username, exp_s, nonce, sig = parts
-        if ver != "v1":
-            return None
-
-        exp = int(exp_s)
-        if time.time() > exp:
-            return None
-
-        msg = f"{ver}|{username}|{exp_s}|{nonce}"
-        expected = _sign(msg, secret_key)
-        if not hmac.compare_digest(expected, sig):
-            return None
-
-        return username
-    except Exception:
-        return None
-
-
-def boot_gate():
-    # 1. Kalau di RAM sudah login, aman
-    if st.session_state.get("logged_in", False):
-        return
-
-    # 2. Init counter
-    if "_boot_gate_rerun_count" not in st.session_state:
-        st.session_state["_boot_gate_rerun_count"] = 0
-
-    # 3. Baca Cookie
-    cookies = cookie_manager.get_all()
-
-    # 4. LOGIKA SABAR:
-    # Jika cookie kosong, kita akan coba refresh SAMPAI 2 KALI.
-    # Refresh 1: Membangun jembatan Python <-> Browser
-    # Refresh 2: Mengambil data
-    if (not cookies) and st.session_state["_boot_gate_rerun_count"] < 2:
-        st.session_state["_boot_gate_rerun_count"] += 1
-        time.sleep(0.5) # Tunggu setengah detik
-        st.rerun()
+        ver, user, exp_s, nonce, sig = token.split("|")
+        if ver != "v1" or int(exp_s) < int(time.time()): return None
+        expected = hmac.new(key.encode(), f"{ver}|{user}|{exp_s}|{nonce}".encode(), hashlib.sha256).digest()
+        actual = base64.urlsafe_b64encode(expected).decode().rstrip('=')
+        return user if hmac.compare_digest(actual, sig) else None
+    except: return None
 
 # =========================================================
-# 5) LOGIN CHECK (FAST)
+# C. PERSISTENCE & IDLE ENGINE
 # =========================================================
 def check_login() -> bool:
-
-    # KODE LAMA KAMU:
-    if st.session_state.pop("_skip_cookie_once", False):
-        st.session_state["logged_in"] = False
-        st.session_state["username"] = ""
+    """The absolute guard. Handles RAM cache, Browser Cookie, and Idle Timeout."""
+    if st.session_state.get("_force_logout", False):
         return False
 
-    if st.session_state.get("logged_in", False):
+    conf = _get_secrets()
+
+    # 1. Check Idle Timeout for active sessions
+    if st.session_state.get("logged_in"):
+        last_active = st.session_state.get("_last_active_at", 0)
+        if last_active > 0:
+            elapsed_min = (time.time() - last_active) / 60
+            if elapsed_min > conf["idle_timeout_min"]:
+                _exec_logout(reason="Session expired due to inactivity. 🕒")
+                return False
+        
+        # Update activity timestamp on every interaction
+        st.session_state["_last_active_at"] = time.time()
         return True
 
-    sec = _get_auth_secrets()
-    secret_key = sec["cookie_secret"]
-
-    if not secret_key:
-        st.session_state["logged_in"] = False
-        st.session_state["username"] = ""
+    # 2. Config guard
+    if not conf["key"]:
+        st.error("🚨 Critical: AUTH_COOKIE_SECRET is not configured.")
         return False
 
-    try:
-        # Tambahkan 'or {}' untuk handle jika get_all return None
-        cookies = cookie_manager.get_all() or {} 
-        token = cookies.get("admin_token", "")
-        username = _verify_token(token, secret_key) if token else None
-        
-        if username:
-            st.session_state["logged_in"] = True
-            st.session_state["username"] = username
-            return True
-    except Exception:
-        pass
+    # 3. Cookie Hydration Gate
+    if "_boot_time" not in st.session_state:
+        st.session_state["_boot_time"] = time.time()
 
-    st.session_state["logged_in"] = False
-    st.session_state["username"] = ""
+    cookies = cookie_manager.get_all()
+    if not cookies:
+        elapsed = time.time() - st.session_state["_boot_time"]
+        if elapsed < conf["boot_wait"]:
+            time.sleep(conf["boot_sleep"])
+            st.rerun()
+        return False
+
+    # 4. Token validation from Cookie
+    token = cookies.get(conf["token_name"])
+    if token:
+        user = _validate_token(token, conf["key"])
+        if user:
+            st.session_state["logged_in"] = True
+            st.session_state["username"] = user
+            st.session_state["_last_active_at"] = time.time()
+            return True
+            
     return False
 
+def _exec_logout(reason: str = None):
+    """Unified atomic logout execution."""
+    conf = _get_secrets()
+    st.session_state["_force_logout"] = True
+    cookie_manager.delete(conf["token_name"], key=f"logout_{int(time.time())}")
+    
+    # Selective cleanup
+    for k in ["logged_in", "username", "_boot_time", "_last_active_at"]:
+        st.session_state.pop(k, None)
+    
+    if reason:
+        st.toast(reason, icon="🔒")
+        time.sleep(1)
+    st.rerun()
 
 # =========================================================
-# 6) UI LOGIN PAGE
+# D. UI COMPONENTS
 # =========================================================
 def login_page():
-    sec = _get_auth_secrets()
-    required_user = sec["username"]
-    stored_hash = sec["password_hash"]
-    secret_key = sec["cookie_secret"]
-    cookie_days = sec["cookie_days"]
+    conf = _get_secrets()
+    st.session_state["_force_logout"] = False 
 
-    if not stored_hash or not secret_key:
-        st.error("Auth belum dikonfigurasi. Lengkapi .streamlit/secrets.toml")
-        st.stop()
+    st.markdown("""<style>
+        [data-testid="stHeader"], [data-testid="stSidebar"] {visibility: hidden;}
+        .block-container {padding-top: 5rem;}
+    </style>""", unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 1.5, 1])
-    with col2:
-        st.markdown("<h2 style='text-align: center;'>🔐 Akses Masuk</h2>", unsafe_allow_html=True)
-
+    _, col, _ = st.columns([1, 1.5, 1])
+    with col:
+        st.markdown("<div style='text-align:center; font-size:54px;'>🛸</div>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align:center; margin-bottom:.25rem;'>Admin Portal</h2>", unsafe_allow_html=True)
+        
         with st.container(border=True):
-            st.session_state.setdefault("_login_fail", 0)
-
             with st.form("login_form"):
-                st.write("Silakan masukkan akun Anda:")
-                username = st.text_input("👤 Username")
-                password = st.text_input("🔑 Password", type="password")
-
-                submit = st.form_submit_button("Masuk Sistem", type="primary", use_container_width=True)
-
-                if submit:
-                    # slow-down ringan setelah beberapa gagal
-                    if st.session_state["_login_fail"] >= 3:
-                        time.sleep(0.4)
-
-                    ok_user = (username.strip() == required_user)
-                    ok_pass = verify_password(password, stored_hash)
-
-                    if ok_user and ok_pass:
+                u = st.text_input("👤 Username", placeholder="e.g. admin")
+                p = st.text_input("🔑 Password", type="password", placeholder="••••••••")
+                if st.form_submit_button("✨ Sign In", type="primary", use_container_width=True):
+                    if u == conf["user"] and _verify_pw(p, conf["hash"]):
                         st.session_state["logged_in"] = True
-                        st.session_state["username"] = username.strip()
-                        st.session_state["_login_fail"] = 0
-
-                        ttl = int(cookie_days) * 24 * 60 * 60
-                        token = _make_token(username.strip(), secret_key, ttl_seconds=ttl)
-                        expires_at = int(time.time()) + ttl
-
-                        _cookie_set("admin_token", token, expires_at=expires_at, key="set_login_cookie")
-
-                        st.toast("Login Berhasil!", icon="✅")
+                        st.session_state["username"] = u
+                        st.session_state["_last_active_at"] = time.time()
+                        
+                        token = _create_token(u, conf["key"], conf["days"])
+                        exp = datetime.now() + timedelta(days=conf["days"])
+                        cookie_manager.set(conf["token_name"], token, expires_at=exp, key=f"login_{int(time.time())}")
+                        
+                        st.success("Authorized! Redirecting...")
+                        time.sleep(0.8)
                         st.rerun()
                     else:
-                        st.session_state["_login_fail"] += 1
-                        st.error("Username atau Password salah!")
+                        st.error("❌ Invalid credentials.")
 
-
-# =========================================================
-# 7) LOGOUT CONFIRMATION
-# =========================================================
-@st.dialog(" ")
-def show_logout_confirmation():
-    st.markdown(
-        """
-        <div style="text-align:center; padding: 10px;">
-            <div style="font-size: 44px; margin-bottom: 10px;">👋</div>
-            <div style="font-size: 18px; font-weight: 800; margin-bottom: 6px; color: #1a1a1a;">Konfirmasi Logout</div>
-            <div style="font-size: 14px; color: #6e6e73; margin-bottom: 18px;">Apakah Anda yakin ingin keluar dari sistem?</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+@st.dialog("🚪 Sign Out")
+def show_logout_dialog():
+    st.write("Are you sure you want to end your session?")
     c1, c2 = st.columns(2)
-
-    with c1:
-        if st.button("Batal", use_container_width=True):
-            st.rerun()
-
+    if c1.button("Cancel", use_container_width=True):
+        st.rerun()
+    
     with c2:
-        if st.button("Ya, Keluar", type="primary", use_container_width=True):
-            # expire cookie (lebih reliable)
-            _cookie_delete("admin_token", key="logout_cookie")
+        if danger_container:
+            with danger_container(key="logout_danger"):
+                if st.button("Yes, Logout", type="primary", use_container_width=True):
+                    _exec_logout()
+        else:
+            if st.button("Yes, Logout", type="primary", use_container_width=True):
+                _exec_logout()
 
-            # clear session auth
-            st.session_state["logged_in"] = False
-            st.session_state["username"] = ""
-            st.session_state["_skip_cookie_once"] = True
-
-            # supaya next reload gak rerun-loop
-            st.session_state["_boot_gate_done"] = True
-            st.session_state["_boot_gate_rerun_count"] = 1
-
-            st.rerun()
-
-
-# =========================================================
-# 8) LOGOUT BUTTON
-# =========================================================
 def logout_button():
-    if st.sidebar.button("🚪 Logout", key="sidebar_logout_btn", use_container_width=True):
-        show_logout_confirmation()
+    if st.sidebar.button("🚪 Sign Out", use_container_width=True):
+        show_logout_dialog()
