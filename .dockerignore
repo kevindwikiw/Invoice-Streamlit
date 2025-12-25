@@ -1,0 +1,16 @@
+# Abaikan folder virtual environment (berat!)
+venv/
+env/
+
+# Abaikan file cache Python (sampah)
+__pycache__/
+*.pyc
+
+# Abaikan folder git
+.git/
+
+# PENTING: Abaikan secrets lokal biar gak ke-upload
+.streamlit/secrets.toml
+
+# File sampah sistem lain
+.DS_Store
