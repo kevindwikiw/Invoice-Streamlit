@@ -2,181 +2,147 @@
 import time
 import streamlit as st
 from config import settings, theme
+
+# =========================================================
+# 1. PAGE CONFIG (Global Scope - First Command)
+# =========================================================
+st.set_page_config(
+    page_title=settings.PAGE_TITLE, 
+    layout=settings.PAGE_LAYOUT,
+    initial_sidebar_state="expanded"
+)
+
+# Imports after page_config
 from modules import auth, db
 from views import packages_view, invoice_view
 
-# =========================
-# 0) GLOBAL DIALOGS
-# =========================
+# =========================================================
+# 2. INITIALIZATION ROUTINES
+# =========================================================
+def init_application():
+    """Initializes Theme and Database connection."""
+    st.markdown(theme.CSS, unsafe_allow_html=True)
+    
+    # Initialize DB (Singleton pattern)
+    if not st.session_state.get("_db_initialized", False):
+        db.init_db()
+        st.session_state["_db_initialized"] = True
+
+# =========================================================
+# 3. UI COMPONENTS
+# =========================================================
 @st.dialog("🚨 Factory Reset")
 def show_factory_reset_dialog():
-    st.error("PERINGATAN: Ini akan menghapus **SELURUH** data paket.")
-    st.caption("Gunakan hanya untuk dev/testing.")
-    confirm = st.text_input("Ketik **CONFIRM** untuk melanjutkan:")
-
+    st.error("WARNING: Irreversible Action")
+    st.caption("This will delete **ALL** packages.")
+    
+    confirm = st.text_input("Type **CONFIRM** to proceed:")
+    
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Cancel", use_container_width=True):
             st.rerun()
     with c2:
-        if st.button(
-            "💣 Hapus Semuanya",
-            type="primary",
-            disabled=(confirm != "CONFIRM"),
-            use_container_width=True,
-        ):
-            try:
-                db.delete_all_packages()
-                st.success("Sistem berhasil di-reset.")
-                time.sleep(0.5) # Beri waktu user membaca success message
-                st.rerun()
-            except Exception as e:
-                st.error("Gagal reset database.")
-                st.caption(f"Debug: {e}")
+        if st.button("💣 Delete All", type="primary", disabled=(confirm != "CONFIRM"), use_container_width=True):
+            db.delete_all_packages()
+            st.success("System reset successful.")
+            time.sleep(1.0)
+            st.rerun()
 
-# =========================
-# 1) APP INIT
-# =========================
-def init_app():
-    st.set_page_config(page_title=settings.PAGE_TITLE, layout=settings.PAGE_LAYOUT)
-    
-    # Theme single source
-    st.markdown(theme.CSS, unsafe_allow_html=True)
-
-    # Init DB once per session
-    if not st.session_state.get("_db_inited", False):
-        db.init_db()
-        st.session_state["_db_inited"] = True
-
-# =========================
-# 2) SIDEBAR UI
-# =========================
-def _sidebar() -> str:
+def render_sidebar() -> str:
     with st.sidebar:
         st.markdown("## 🧭 Admin Panel")
 
+        # User Card
         username = st.session_state.get("username", "Admin")
-
-        # Status chip (Visual User Card)
         st.markdown(
             f"""
             <div style="
               display:flex; justify-content:space-between; align-items:center;
-              padding:10px 12px; border:1px solid var(--border); border-radius:12px;
-              background:#fff; margin-top:8px;">
-              <div>
-                <div style="font-weight:900; color:var(--text); line-height:1.1;">{username}</div>
-                <div style="color:var(--muted); font-size:.85rem; margin-top:3px;">Signed in</div>
+              padding:12px 14px; border:1px solid var(--border); border-radius:12px;
+              background:#fff; margin-top:8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+              <div style="display:flex; align-items:center; gap: 10px;">
+                <div style="font-size: 20px;">👤</div>
+                <div>
+                    <div style="font-weight:700; color:#333; line-height:1.2;">{username}</div>
+                    <div style="color:#2ecc71; font-size:11px; font-weight:600;">● Online</div>
+                </div>
               </div>
-              <div style="
-                width:10px; height:10px; border-radius:999px; background:#2ecc71;
-                box-shadow:0 0 0 4px rgba(46,204,113,.14);"></div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
         st.write("")
 
-        # Quick stats & DB Check
+        # Stats
         try:
             packages = db.load_packages()
             pkg_count = len(packages)
-            db_empty = pkg_count == 0
+            db_empty = (pkg_count == 0)
         except Exception:
             pkg_count = 0
             db_empty = True
 
-        st.markdown(
-            f"""
-            <div style="
-              padding:12px; border:1px solid var(--border); border-radius:12px;
-              background: var(--soft);">
-              <div style="color:var(--muted); font-size:.78rem; letter-spacing:.06em; font-weight:900; text-transform:uppercase;">
-                Summary
-              </div>
-              <div style="display:flex; justify-content:space-between; margin-top:10px;">
-                <div style="color:var(--muted);">Packages</div>
-                <div style="font-weight:900; color:var(--text);">{pkg_count}</div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
+        st.metric(label="Total Packages", value=str(pkg_count))
         st.divider()
 
-        # --- NAVIGATION LOGIC IMPROVED ---
-        
-        # 1. Tentukan opsi yang tersedia berdasarkan kondisi DB
+        # Navigation
         nav_options = ["📦 Package Database"]
         if not db_empty:
             nav_options.append("🧾 Create Invoice")
         
-        # 2. Handle state jika user sebelumnya di halaman invoice lalu DB dihapus
-        current_menu = st.session_state.get("menu", nav_options[0])
-        if current_menu not in nav_options:
-            current_menu = nav_options[0]
-
-        # 3. Render Radio Button
-        # Kita gunakan index berdasarkan current_menu yang valid
-        try:
-            idx = nav_options.index(current_menu)
-        except ValueError:
-            idx = 0
-
+        # State Persistence
+        current_selection = st.session_state.get("menu_selection", nav_options[0])
+        if current_selection not in nav_options: 
+            current_selection = nav_options[0]
+        
         selected = st.radio(
-            "Navigation", 
+            "Main Menu", 
             options=nav_options, 
-            index=idx, 
-            key="menu_radio"
+            index=nav_options.index(current_selection),
+            key="nav_radio",
+            label_visibility="collapsed"
         )
+        st.session_state["menu_selection"] = selected
 
-        # Update session state
-        st.session_state["menu"] = selected
-
-        # Show warning if needed (hanya visual, karena opsi invoice sudah hilang)
         if db_empty:
-             st.caption("⚠️ *Menu Invoice terkunci karena database kosong.*")
+             st.info("💡 Add a package to unlock Invoicing.")
 
         st.divider()
 
-        # Logout
+        # Auth & Tools
         auth.logout_button()
-
-        # Dev tools
-        with st.expander("⚙️ Dev Tools"):
+        
+        with st.expander("🛠️ System Tools"):
             if st.button("🔴 Factory Reset", use_container_width=True):
                 show_factory_reset_dialog()
 
         return selected
 
-# =========================
-# 3) ROUTING
-# =========================
+# =========================================================
+# 4. MAIN EXECUTION
+# =========================================================
 def main():
-    init_app()
+    
+    # 1. Setup
+    init_application()
 
-    # Smooth cookie readiness
-    auth.boot_gate()
-
-    # Auth guard
+    # 2. AUTH GUARD (Stops execution if not logged in)
     if not auth.check_login():
         auth.login_page()
-        st.stop()
+        st.stop() 
 
-    # Render Sidebar & Get Selection
-    menu = _sidebar()
+    # 3. AUTHORIZED ZONE
+    selected_menu = render_sidebar()
 
-    # Router
-    if menu == "📦 Package Database":
+    if selected_menu == "📦 Package Database":
         packages_view.render_page()
-    elif menu == "🧾 Create Invoice":
-        # Double check safety (meskipun sidebar sudah handle)
+        
+    elif selected_menu == "🧾 Create Invoice":
         if db.is_db_empty():
-            st.error("Database kosong. Mohon input paket terlebih dahulu.")
-            if st.button("Kembali ke Database"):
-                 st.session_state["menu"] = "📦 Package Database"
+            st.error("Database is empty. Please add packages first.")
+            if st.button("Back to Database"):
+                 st.session_state["menu_selection"] = "📦 Package Database"
                  st.rerun()
         else:
             invoice_view.render_page()
@@ -185,6 +151,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        # Global Error Boundary agar app tidak crash total layar putih
-        st.error("Terjadi kesalahan sistem.")
-        st.expander("Detail Error").code(str(e))
+        st.error("An unexpected system error occurred.")
+        with st.expander("Admin Details"):
+            st.code(str(e))
