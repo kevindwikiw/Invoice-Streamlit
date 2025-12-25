@@ -1,6 +1,7 @@
 streamlit
 pandas
 reportlab
+extra-streamlit-components
 google-api-python-client
 google-auth
 google-auth-oauthlib
