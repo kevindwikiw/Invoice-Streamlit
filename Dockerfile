@@ -5,13 +5,13 @@ FROM python:3.9-slim
 WORKDIR /app
 
 # 3. Update pip & Install tools dasar
-# HAPUS 'software-properties-common' biar gak error
+# PERBAIKAN: Kita hapus 'software-properties-common' yang bikin error tadi
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. Copy requirements.txt
+# 4. Copy requirements.txt DULUAN
 COPY requirements.txt .
 
 # 5. Install Library Python
