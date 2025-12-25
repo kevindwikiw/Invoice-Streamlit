@@ -19,17 +19,23 @@ except ImportError:
 # A. CONFIGURATION
 # =========================================================
 def _get_secrets():
-    """Flat secret fetching (st.secrets or Environment Variables)."""
-    get = lambda k, d: st.secrets.get(k, os.getenv(k, d))
+    """Fetching secrets from st.secrets (local) or Environment Variables (Fly.io)."""
+    def get_val(key, default=None):
+        # Prioritas: 1. st.secrets, 2. OS Environment
+        try:
+            if key in st.secrets: return st.secrets[key]
+        except: pass
+        return os.environ.get(key, default)
+
     return {
-        "user": get("AUTH_USERNAME", "admin"),
-        "hash": get("AUTH_PASSWORD_HASH", ""),
-        "key": get("AUTH_COOKIE_SECRET", ""),
-        "days": int(get("AUTH_COOKIE_DAYS", 14)),
-        "token_name": get("AUTH_COOKIE_NAME", "admin_auth_token"),
-        "boot_wait": float(get("AUTH_COOKIE_BOOT_WAIT", 2.5)),
-        "boot_sleep": float(get("AUTH_COOKIE_BOOT_SLEEP", 0.12)),
-        "idle_timeout_min": int(get("AUTH_IDLE_TIMEOUT_MIN", 30)), # Auto logout after 30 mins
+        "user": get_val("AUTH_USERNAME", "admin"),
+        "hash": get_val("AUTH_PASSWORD_HASH", ""),
+        "key": get_val("AUTH_COOKIE_SECRET", ""),
+        "days": int(get_val("AUTH_COOKIE_DAYS", 14)),
+        "token_name": get_val("AUTH_COOKIE_NAME", "admin_auth_token"),
+        "boot_wait": float(get_val("AUTH_COOKIE_BOOT_WAIT", 2.5)),
+        "boot_sleep": float(get_val("AUTH_COOKIE_BOOT_SLEEP", 0.12)),
+        "idle_timeout_min": int(get_val("AUTH_IDLE_TIMEOUT_MIN", 30)),
     }
 
 @st.cache_resource
@@ -190,3 +196,4 @@ def show_logout_dialog():
 def logout_button():
     if st.sidebar.button("🚪 Sign Out", use_container_width=True):
         show_logout_dialog()
+
