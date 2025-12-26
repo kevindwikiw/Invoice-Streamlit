@@ -11,7 +11,6 @@ from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
-
 # =========================================================
 # Helpers
 # =========================================================
@@ -26,9 +25,7 @@ def _safe_str(x) -> str:
     return "" if x is None else str(x)
 
 def _draw_polygon(c: canvas.Canvas, points, fill_color=colors.black, stroke_color=None, stroke=0):
-    """
-    points: [(x1,y1),(x2,y2),...]
-    """
+    """Draws a polygon shape (used for the header ribbon tail)."""
     p = c.beginPath()
     p.moveTo(points[0][0], points[0][1])
     for x, y in points[1:]:
@@ -42,16 +39,12 @@ def _draw_polygon(c: canvas.Canvas, points, fill_color=colors.black, stroke_colo
     c.drawPath(p, fill=1, stroke=stroke)
 
 def _try_draw_logo(c: canvas.Canvas, x, y, w, h, logo_path: str):
-    """
-    Draw logo image if exists; otherwise draw ORBIT text.
-    (x,y) is bottom-left.
-    """
+    """Draws logo if found, otherwise text."""
     if logo_path and os.path.exists(logo_path):
         try:
             img = ImageReader(logo_path)
             iw, ih = img.getSize()
             aspect = ih / float(iw)
-            # fit inside w,h
             draw_w = w
             draw_h = draw_w * aspect
             if draw_h > h:
@@ -64,343 +57,307 @@ def _try_draw_logo(c: canvas.Canvas, x, y, w, h, logo_path: str):
         except Exception:
             pass
 
-    # fallback: simple ORBIT mark
+    # Fallback Text
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 14)
     c.drawCentredString(x + w / 2, y + h / 2 - 5, "ORBIT")
 
-
 # =========================================================
-# Main: Generate PDF
-# meta: dict
-# items: list[dict] each item keys:
-#   Description, Qty, Price, Total, Details (optional)
-# grand_total: int
+# MAIN GENERATOR
 # =========================================================
 def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     W, H = A4
 
-    # -------------------------
-    # Palette / constants
-    # -------------------------
+    # --- Constants & Colors ---
     BLACK = colors.HexColor("#0b0b0c")
-    GRAY = colors.HexColor("#6e6e73")
-    LIGHT = colors.HexColor("#f4f5f7")
-    LINE = colors.HexColor("#1b1b1c")  # grid border (dark)
     WHITE = colors.white
-
+    LINE = colors.HexColor("#1b1b1c")
+    
     margin = 18 * mm
     top_bar_h = 28 * mm
-
     logo_block_w = 58 * mm
-    logo_block_h = top_bar_h
-    ribbon_drop = 18 * mm  # diagonal tail height
+    ribbon_drop = 18 * mm
 
-    # paths
-    LOGO_PATH = meta.get("logo_path", "assets/logo.png")
+    # --- Extract Meta Data ---
+    # Basic Info
+    inv_no = _safe_str(meta.get("inv_no", "0001"))
+    title = _safe_str(meta.get("title", "")) # Event Title
+    date_str = meta.get("date") or datetime.today().strftime("%d %B %Y")
+    client = _safe_str(meta.get("client_name", "-"))
 
-    # meta fields (safe defaults)
-    inv_no = _safe_str(meta.get("inv_no", meta.get("invoice_no", "0001")))
-    client = _safe_str(meta.get("client_name", meta.get("client", "-")))
-    inv_date = meta.get("date") or meta.get("issued") or datetime.today().strftime("%d / %m / %Y")
+    # Wedding Info
+    wedding_date = _safe_str(meta.get("wedding_date", ""))
+    venue = _safe_str(meta.get("venue", ""))
 
-    subtotal = meta.get("subtotal", grand_total)
-    cashback = meta.get("cashback", 0)
+    # Bank Info
+    bank_nm = _safe_str(meta.get("bank_name", ""))
+    bank_ac = _safe_str(meta.get("bank_acc", ""))
+    bank_an = _safe_str(meta.get("bank_holder", ""))
 
-    # Optional extra fields (for bottom left / payment plan)
-    event_date = _safe_str(meta.get("event_date", meta.get("wedding_date", "")))
-    venue = _safe_str(meta.get("venue", meta.get("event_venue", "")))
+    # Terms
+    terms_text = _safe_str(meta.get("terms", ""))
 
-    bank_name = _safe_str(meta.get("bank_name", meta.get("bank_nm", ""))) or "-"
-    bank_holder = _safe_str(meta.get("bank_holder", meta.get("bank_an", ""))) or "-"
-    bank_acc = _safe_str(meta.get("bank_acc", meta.get("bank_ac", ""))) or "-"
+    # Money
+    subtotal = float(meta.get("subtotal", 0))
+    cashback = float(meta.get("cashback", 0))
+    # grand_total passed as argument
 
-    # Payment plan area
-    payments = meta.get("payments", [])  # list of dict: {"label": "...", "amount": 0}
-    remaining = meta.get("remaining_balance", None)  # int
-    next_payment = _safe_str(meta.get("next_payment_text", ""))
+    # Payment Schedule (From View State)
+    # We create a list of tuples: (Label, Amount)
+    payment_plan = []
+    if meta.get("pay_dp1", 0) > 0:
+        payment_plan.append(("Down Payment 1", meta["pay_dp1"]))
+    if meta.get("pay_term2", 0) > 0:
+        payment_plan.append(("Payment 2 (H+7 Exhibition)", meta["pay_term2"]))
+    if meta.get("pay_term3", 0) > 0:
+        payment_plan.append(("Payment 3 (H-7 Prewedding)", meta["pay_term3"]))
+    if meta.get("pay_full", 0) > 0:
+        payment_plan.append(("Full Payment (H-7 Wedding)", meta["pay_full"]))
+
+    # Calculate Remaining
+    total_paid_plan = sum(p[1] for p in payment_plan)
+    remaining = max(0, grand_total - total_paid_plan)
 
     # -------------------------
-    # 1) Top Banner (black)
+    # 1. HEADER BANNER
     # -------------------------
     c.setFillColor(BLACK)
     c.rect(0, H - top_bar_h, W, top_bar_h, fill=1, stroke=0)
 
-    # left logo block separator lines (white)
+    # Separator Line
     c.setStrokeColor(WHITE)
     c.setLineWidth(1)
-    c.line(margin + logo_block_w, H - top_bar_h, margin + logo_block_w, H)  # vertical sep
+    c.line(margin + logo_block_w, H - top_bar_h, margin + logo_block_w, H)
 
-    # logo inside left block
-    _try_draw_logo(
-        c,
-        x=margin + 6 * mm,
-        y=H - top_bar_h + 4 * mm,
-        w=logo_block_w - 12 * mm,
-        h=top_bar_h - 8 * mm,
-        logo_path=LOGO_PATH,
-    )
+    # Logo
+    _try_draw_logo(c, margin + 6*mm, H - top_bar_h + 4*mm, logo_block_w - 12*mm, top_bar_h - 8*mm, "assets/logo.png")
 
-    # diagonal ribbon tail (black triangle) below left block
-    # mimic the sample: a diagonal cut that drops down into white area
-    tail_left = margin
-    tail_right = margin + logo_block_w
-    tail_top = H - top_bar_h
-    tail_bottom = tail_top - ribbon_drop
-    _draw_polygon(
-        c,
-        points=[
-            (tail_left, tail_top),
-            (tail_right, tail_top),
-            (tail_left, tail_bottom),
-        ],
-        fill_color=BLACK,
-        stroke=0,
-    )
-    # white outline on the diagonal (subtle)
+    # Diagonal Tail
+    tail_pts = [
+        (margin, H - top_bar_h),
+        (margin + logo_block_w, H - top_bar_h),
+        (margin, H - top_bar_h - ribbon_drop)
+    ]
+    _draw_polygon(c, tail_pts, fill_color=BLACK, stroke=0)
     c.setStrokeColor(WHITE)
-    c.setLineWidth(1)
-    c.line(tail_right, tail_top, tail_left, tail_bottom)
+    c.line(tail_pts[1][0], tail_pts[1][1], tail_pts[2][0], tail_pts[2][1])
 
-    # INVOICE title on the right
+    # "INVOICE" Text
     c.setFillColor(WHITE)
     c.setFont("Times-Roman", 18)
-    title_x = W - margin
-    title_y = H - 16 * mm
-    c.drawRightString(title_x, title_y, "INVOICE")
-    # underline
+    c.drawRightString(W - margin, H - 16*mm, "INVOICE")
     c.setLineWidth(1)
-    c.line(W - margin - 52 * mm, title_y - 2 * mm, W - margin, title_y - 2 * mm)
+    c.line(W - margin - 52*mm, H - 18*mm, W - margin, H - 18*mm)
 
     # -------------------------
-    # 2) Invoice meta block (right under banner)
+    # 2. INVOICE META
     # -------------------------
-    meta_top_y = H - top_bar_h - 10 * mm
-
-    # Left of this block: "INVOICE TO:"
+    y_meta = H - top_bar_h - 10 * mm
+    
+    # Left Side: To Client
     c.setFillColor(BLACK)
     c.setFont("Helvetica-Bold", 7)
-    c.drawRightString(W - margin - 52 * mm, meta_top_y, "INVOICE TO :")
-    c.setFont("Helvetica", 8)
-    c.drawRightString(W - margin - 52 * mm, meta_top_y - 8 * mm, client.upper())
+    c.drawRightString(W - margin - 52*mm, y_meta, "INVOICE TO :")
+    
+    c.setFont("Helvetica-Bold", 9)
+    c.drawRightString(W - margin - 52*mm, y_meta - 5*mm, client.upper())
+    
+    if title:
+        c.setFont("Helvetica-Oblique", 7)
+        c.drawRightString(W - margin - 52*mm, y_meta - 9*mm, title)
 
-    # Right of this block: invoice# + date
+    # Right Side: No & Date
     c.setFont("Helvetica-Bold", 7)
-    c.drawRightString(W - margin, meta_top_y, f"INVOICE#:  {_safe_str(inv_no)}")
-    c.drawRightString(W - margin, meta_top_y - 8 * mm, f"DATE :  {inv_date}")
+    c.drawRightString(W - margin, y_meta, f"INVOICE#:  {inv_no}")
+    c.drawRightString(W - margin, y_meta - 5*mm, f"DATE :  {date_str}")
 
     # -------------------------
-    # 3) Table
+    # 3. TABLE ITEMS
     # -------------------------
-    table_x = margin
-    table_top_y = meta_top_y - 18 * mm  # start below meta block
-
-    # Build paragraphs for item description (title + bullets)
+    table_y_start = y_meta - 18 * mm
+    
+    # Styles
     styles = getSampleStyleSheet()
-    p_title = ParagraphStyle(
-        "p_title",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=8.8,
-        leading=11,
-        textColor=BLACK,
-        spaceAfter=2,
-    )
-    p_line = ParagraphStyle(
-        "p_line",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=7.4,
-        leading=9.6,
-        textColor=BLACK,
-    )
+    style_item = ParagraphStyle("item", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=8.5, leading=10)
+    style_desc = ParagraphStyle("desc", parent=styles["Normal"], fontName="Helvetica", fontSize=7.5, leading=9, leftIndent=0)
 
-    def item_desc_paragraph(desc: str, details: str) -> Paragraph:
-        desc = _safe_str(desc).strip() or "-"
-        lines = []
-        det_lines = [x.strip() for x in _safe_str(details).split("\n") if x.strip()]
-
-        html = f"<b>{desc}</b>"
-        if det_lines:
-            html += "<br/>" + "<br/>".join([f"• {ln}" for ln in det_lines])
-        return Paragraph(html, ParagraphStyle("mix", parent=p_line))
-
-    # header
+    # Build Data
     data = [[
-        Paragraph("<b>NO</b>", p_line),
-        Paragraph("<b>ITEM DESCRIPTION</b>", p_line),
-        Paragraph("<b>PRICE</b>", p_line),
-        Paragraph("<b>QTY</b>", p_line),
-        Paragraph("<b>TOTAL</b>", p_line),
+        "NO", "ITEM DESCRIPTION", "PRICE", "QTY", "TOTAL"
     ]]
 
-    # rows
-    for i, it in enumerate(items or [], start=1):
-        desc = it.get("Description", it.get("description", ""))
-        qty = it.get("Qty", it.get("qty", 1))
-        price = it.get("Price", it.get("price", 0))
-        total = it.get("Total", it.get("total", 0))
-        details = it.get("Details", it.get("details", ""))
+    for i, it in enumerate(items, 1):
+        desc_txt = _safe_str(it.get("Description", ""))
+        det_txt = _safe_str(it.get("Details", ""))
+        
+        # Combine Desc + Details
+        cell_xml = f"<b>{desc_txt}</b>"
+        if det_txt:
+            lines = [l.strip() for l in det_txt.split('\n') if l.strip()]
+            if lines:
+                cell_xml += "<br/><br/>" + "<br/>".join([f"• {l}" for l in lines])
+        
+        p = Paragraph(cell_xml, style_desc)
+        
+        row = [
+            str(i),
+            p,
+            f"Rp {_fmt_idr(it.get('Price', 0))}",
+            str(int(it.get('Qty', 1))),
+            f"Rp {_fmt_idr(it.get('Total', 0))}"
+        ]
+        data.append(row)
 
-        data.append([
-            Paragraph(f"{i}", p_line),
-            item_desc_paragraph(desc, details),
-            Paragraph(f"Rp&nbsp;&nbsp;{_fmt_idr(price)}", p_line),
-            Paragraph(f"{int(qty) if str(qty).isdigit() else qty}", p_line),
-            Paragraph(f"Rp&nbsp;&nbsp;{_fmt_idr(total)}", p_line),
-        ])
-
-    # column widths (close to sample)
-    col_w = [
-        10 * mm,   # NO
-        102 * mm,  # ITEM
-        25 * mm,   # PRICE
-        12 * mm,   # QTY
-        25 * mm,   # TOTAL
-    ]
-
-    t = Table(data, colWidths=col_w)
-
+    # Table Layout
+    col_widths = [10*mm, 102*mm, 25*mm, 12*mm, 25*mm]
+    t = Table(data, colWidths=col_widths)
+    
     t.setStyle(TableStyle([
-        # header row
-        ("BACKGROUND", (0, 0), (-1, 0), BLACK),
-        ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 7.5),
-        ("ALIGN", (0, 0), (0, 0), "CENTER"),
-        ("ALIGN", (2, 0), (-1, 0), "CENTER"),
-        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, 0), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
-
-        # body
-        ("VALIGN", (0, 1), (-1, -1), "TOP"),
-        ("FONTSIZE", (0, 1), (-1, -1), 7.4),
-        ("TOPPADDING", (0, 1), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
-
-        ("ALIGN", (0, 1), (0, -1), "CENTER"),     # NO
-        ("ALIGN", (2, 1), (2, -1), "RIGHT"),      # PRICE
-        ("ALIGN", (3, 1), (3, -1), "CENTER"),     # QTY
-        ("ALIGN", (4, 1), (4, -1), "RIGHT"),      # TOTAL
-
-        # grid lines (thin, dark)
-        ("GRID", (0, 0), (-1, -1), 0.6, LINE),
+        ('BACKGROUND', (0,0), (-1,0), BLACK),
+        ('TEXTCOLOR', (0,0), (-1,0), WHITE),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 7.5),
+        ('ALIGN', (0,0), (-1,0), 'CENTER'),
+        ('VALIGN', (0,0), (-1,0), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (-1,0), 6),
+        ('BOTTOMPADDING', (0,0), (-1,0), 6),
+        
+        # Rows
+        ('VALIGN', (0,1), (-1,-1), 'TOP'),
+        ('FONTNAME', (0,1), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,1), (-1,-1), 7.5),
+        ('TOPPADDING', (0,1), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,1), (-1,-1), 6),
+        ('GRID', (0,0), (-1,-1), 0.5, LINE),
+        
+        # Column Alignments
+        ('ALIGN', (0,1), (0,-1), 'CENTER'), # NO
+        ('ALIGN', (1,1), (1,-1), 'LEFT'),   # DESC
+        ('ALIGN', (2,1), (2,-1), 'RIGHT'),  # PRICE
+        ('ALIGN', (3,1), (3,-1), 'CENTER'), # QTY
+        ('ALIGN', (4,1), (4,-1), 'RIGHT'),  # TOTAL
     ]))
 
-    tw, th = t.wrapOn(c, W - 2 * margin, H)
-    table_y = table_top_y - th
-    t.drawOn(c, table_x, table_y)
+    w_table, h_table = t.wrapOn(c, W, H)
+    t.drawOn(c, margin, table_y_start - h_table)
+    
+    cursor_y = table_y_start - h_table - 8*mm
 
     # -------------------------
-    # 4) Bottom-left info (Wedding Date / Venue + Payment Info)
+    # 4. BOTTOM SECTIONS
     # -------------------------
-    bottom_left_y = table_y - 10 * mm
+    
+    # --- LEFT SIDE: INFO & TERMS ---
+    left_x = margin
+    
     c.setFillColor(BLACK)
-    c.setFont("Helvetica", 8)
-
-    if event_date.strip():
-        c.drawString(margin, bottom_left_y, "Wedding Date")
-        c.drawString(margin + 30 * mm, bottom_left_y, f":  {event_date}")
-        bottom_left_y -= 5 * mm
-
-    if venue.strip():
-        c.drawString(margin, bottom_left_y, "Venue")
-        c.drawString(margin + 30 * mm, bottom_left_y, f":  {venue}")
-        bottom_left_y -= 7 * mm
-    else:
-        bottom_left_y -= 2 * mm
-
-    # Payment Info block
+    
+    # 4a. Wedding Info
+    if wedding_date or venue:
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(left_x, cursor_y, "Event Details:")
+        cursor_y -= 4*mm
+        
+        c.setFont("Helvetica", 8)
+        if wedding_date:
+            c.drawString(left_x, cursor_y, f"Date: {wedding_date}")
+            cursor_y -= 4*mm
+        if venue:
+            c.drawString(left_x, cursor_y, f"Venue: {venue}")
+            cursor_y -= 6*mm
+    
+    # 4b. Payment Info
     c.setFont("Helvetica-Bold", 8)
-    c.drawString(margin, bottom_left_y, "Payment Info")
-    bottom_left_y -= 6 * mm
-
+    c.drawString(left_x, cursor_y, "Payment Info:")
+    cursor_y -= 4*mm
+    
     c.setFont("Helvetica", 8)
-    c.drawString(margin, bottom_left_y, "Bank")
-    c.drawString(margin + 30 * mm, bottom_left_y, f":  {bank_name}")
-    bottom_left_y -= 5 * mm
+    c.drawString(left_x, cursor_y, f"Bank: {bank_nm}")
+    cursor_y -= 4*mm
+    c.drawString(left_x, cursor_y, f"Acc: {bank_ac}")
+    cursor_y -= 4*mm
+    c.drawString(left_x, cursor_y, f"A/N: {bank_an}")
+    cursor_y -= 8*mm
 
-    c.drawString(margin, bottom_left_y, "A/C Name")
-    c.drawString(margin + 30 * mm, bottom_left_y, f":  {bank_holder}")
-    bottom_left_y -= 5 * mm
+    # 4c. Terms & Conditions
+    if terms_text:
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(left_x, cursor_y, "Terms & Conditions:")
+        cursor_y -= 4*mm
+        
+        c.setFont("Helvetica", 7)
+        # Split terms by newline
+        term_lines = terms_text.split('\n')
+        for line in term_lines:
+            if line.strip():
+                c.drawString(left_x, cursor_y, line.strip())
+                cursor_y -= 3*mm
 
-    c.drawString(margin, bottom_left_y, "Account#")
-    c.drawString(margin + 30 * mm, bottom_left_y, f":  {bank_acc}")
-
-    # Thank you note (bottom)
-    c.setFont("Helvetica-Oblique", 8)
-    c.drawString(margin, 28 * mm, "Thankyou for trusting us")
-
-    # -------------------------
-    # 5) Totals box (bottom-right)
-    # -------------------------
+    # --- RIGHT SIDE: TOTALS & SCHEDULE ---
+    # Box Position
     box_w = 86 * mm
     box_x = W - margin - box_w
-    box_y = table_y - 2 * mm  # anchor near table bottom
+    # Start box higher up, aligned with top of left info
+    box_y = table_y_start - h_table - 4*mm 
+    
+    row_h = 7 * mm
+    
+    # Helper to draw summary row
+    def draw_summary_row(label, val_str, bg_color, text_color, is_bold=False):
+        nonlocal box_y
+        c.setFillColor(bg_color)
+        c.rect(box_x, box_y - row_h, box_w, row_h, fill=1, stroke=1)
+        
+        c.setFillColor(text_color)
+        font = "Helvetica-Bold" if is_bold else "Helvetica"
+        c.setFont(font, 9 if is_bold else 8)
+        
+        c.drawString(box_x + 4*mm, box_y - row_h + 2.5*mm, label)
+        c.drawRightString(box_x + box_w - 4*mm, box_y - row_h + 2.5*mm, val_str)
+        box_y -= row_h
 
-    row_h = 7.5 * mm
-
-    # TOTAL row (black)
-    c.setFillColor(BLACK)
-    c.rect(box_x, box_y - row_h, box_w, row_h, fill=1, stroke=1)
-    c.setFillColor(WHITE)
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(box_x + 6 * mm, box_y - row_h + 2.4 * mm, "TOTAL:")
-    c.drawRightString(box_x + box_w - 6 * mm, box_y - row_h + 2.4 * mm, f"Rp  {_fmt_idr(subtotal)}")
-
-    # Cashback row (white)
-    y2 = box_y - (2 * row_h)
-    c.setFillColor(WHITE)
-    c.rect(box_x, y2, box_w, row_h, fill=1, stroke=1)
-    c.setFillColor(BLACK)
-    c.setFont("Helvetica", 8.7)
-    c.drawString(box_x + 6 * mm, y2 + 2.4 * mm, "Cashback:")
-    c.drawRightString(box_x + box_w - 6 * mm, y2 + 2.4 * mm, f"-Rp  {_fmt_idr(cashback)}")
-
-    # GRAND TOTAL row (black)
-    y3 = box_y - (3 * row_h)
-    c.setFillColor(BLACK)
-    c.rect(box_x, y3, box_w, row_h, fill=1, stroke=1)
-    c.setFillColor(WHITE)
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(box_x + 6 * mm, y3 + 2.4 * mm, "GRAND TOTAL:")
-    c.drawRightString(box_x + box_w - 6 * mm, y3 + 2.4 * mm, f"Rp  {_fmt_idr(grand_total)}")
-
-    # Payment schedule list under totals
-    y_list = y3 - 6 * mm
-    c.setFillColor(BLACK)
-    c.setFont("Helvetica", 7.8)
-
-    # if payments provided, print like sample (Payment 1/2/3/Full)
-    if isinstance(payments, list) and payments:
-        for p in payments:
-            label = _safe_str(p.get("label", "")).strip()
-            amt = p.get("amount", "")
-            if not label:
-                continue
-            c.drawString(box_x + 6 * mm, y_list, f"{label}:")
-            c.drawRightString(box_x + box_w - 6 * mm, y_list, f"Rp  {_fmt_idr(amt)}" if str(amt).strip() else "-")
-            y_list -= 4.6 * mm
-        y_list -= 1.5 * mm
-
-    # Remaining Balance
-    if remaining is not None:
-        c.setFont("Helvetica-Bold", 8.5)
-        c.drawString(box_x + 6 * mm, y_list, "Remaining Balance:")
-        c.drawRightString(box_x + box_w - 6 * mm, y_list, f"Rp  {_fmt_idr(remaining)}")
-        y_list -= 7 * mm
-
-    # Next payment bar (black)
-    if next_payment.strip():
-        bar_h = 7 * mm
+    # 1. Subtotal
+    draw_summary_row("SUBTOTAL", f"Rp {_fmt_idr(subtotal)}", WHITE, BLACK)
+    
+    # 2. Cashback (if any)
+    if cashback > 0:
+        draw_summary_row("CASHBACK", f"- Rp {_fmt_idr(cashback)}", WHITE, BLACK)
+        
+    # 3. GRAND TOTAL
+    draw_summary_row("GRAND TOTAL", f"Rp {_fmt_idr(grand_total)}", BLACK, WHITE, is_bold=True)
+    
+    # Spacer
+    box_y -= 4*mm
+    
+    # 4. PAYMENT SCHEDULE LIST
+    if payment_plan:
         c.setFillColor(BLACK)
-        c.rect(box_x, y_list - bar_h + 2 * mm, box_w, bar_h, fill=1, stroke=1)
-        c.setFillColor(WHITE)
-        c.setFont("Helvetica-Bold", 7.6)
-        c.drawCentredString(box_x + box_w / 2, y_list - bar_h + 4.2 * mm, next_payment)
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(box_x, box_y, "Payment Schedule:")
+        box_y -= 4*mm
+        
+        c.setFont("Helvetica", 8)
+        for label, amt in payment_plan:
+            c.drawString(box_x + 2*mm, box_y, label)
+            c.drawRightString(box_x + box_w, box_y, f"Rp {_fmt_idr(amt)}")
+            box_y -= 4*mm
+            
+        # Divider line
+        c.setStrokeColor(LINE)
+        c.line(box_x, box_y + 1*mm, box_x + box_w, box_y + 1*mm)
+        box_y -= 2*mm
+        
+        # Remaining
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(box_x, box_y, "Remaining Balance:")
+        c.drawRightString(box_x + box_w, box_y, f"Rp {_fmt_idr(remaining)}")
+
+    # Footer Note
+    c.setFillColor(colors.HexColor("#555555"))
+    c.setFont("Helvetica-Oblique", 7)
+    c.drawCentredString(W/2, 10*mm, "Thank you for trusting us with your special moments.")
 
     c.showPage()
     c.save()
