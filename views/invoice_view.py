@@ -42,14 +42,15 @@ MIN_QTY = 1
 
 CASHBACK_STEP = 500_000
 PAYMENT_STEP = 1_000_000
+BUNDLE_PRICE_STEP = 500_000
 
 DEFAULT_INVOICE_TITLE = "Exhibition Package 2026"
 DEFAULT_TERMS = (
-    "1. Down Payment sebesar Rp 500.000 (Lima Ratus Ribu Rupiah) saat di booth pameran\n"
-    "2. Termin pembayaran H+7 Pameran: Rp 500.000, H-7 prewedding: Rp 3.000.000, dan pelunasan H-7 wedding\n"
-    "3. Maksimal pembayaran Invoice 1 minggu dari tanggal invoice\n"
-    "4. Paket yang telah dipilih tidak bisa down grade\n"
-    "5. Melakukan pembayaran berarti menyatakan setuju dengan detail invoice. Pembayaran yang telah dilakukan tidak bisa di refund"
+    "Down Payment sebesar Rp 500.000 (Lima Ratus Ribu Rupiah) saat di booth pameran\n"
+    "Termin pembayaran H+7 Pameran: Rp 500.000, H-7 prewedding: Rp 3.000.000, dan pelunasan H-7 wedding\n"
+    "Maksimal pembayaran Invoice 1 minggu dari tanggal invoice\n"
+    "Paket yang telah dipilih tidak bisa down grade\n"
+    "5Melakukan pembayaran berarti menyatakan setuju dengan detail invoice. Pembayaran yang telah dilakukan tidak bisa di refund"
 )
 DEFAULT_BANK_INFO = {
     "bank_nm": "OCBC",
@@ -93,7 +94,8 @@ def _get_custom_css() -> str:
     /* --- CATALOG CARD --- */
     .card {{
         background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:14px;
-        transition:.15s ease; position:relative; height:100%, overflow: visible;;
+        transition:.15s ease; position:relative; height:100%;
+        overflow: visible;
     }}
     .card:hover {{ border-color:#cbd5e1; box-shadow:0 10px 22px rgba(0,0,0,.07); transform:translateY(-2px); }}
     .title {{ font-weight:900; font-size:.95rem; color:#111827; line-height:1.25; margin-top:6px; }}
@@ -197,7 +199,6 @@ def desc_to_lines(desc_clean: str) -> List[str]:
         s = str(raw).strip()
         if not s:
             continue
-        # trim bullet prefixes
         s = s.lstrip("-•·").strip()
         if s:
             lines.append(s)
@@ -210,19 +211,15 @@ def normalize_desc_text(raw: Any) -> str:
     """
     s = str(raw or "")
 
-    # 1) Handle escaped: &lt;br ...&gt;
-    # Convert to a temporary real tag then parse with the same logic.
+    # handle escaped tags
     s = s.replace("&lt;", "<").replace("&gt;", ">")
 
-    # 2) Replace any <br ...> (any case/spacing/attrs) with newline
     out = []
     i = 0
     n = len(s)
     while i < n:
-        # case-insensitive check for "<br"
         if s[i] == "<" and i + 2 < n and s[i:i+3].lower() == "<br":
             j = i + 3
-            # jump until closing '>' (if exists)
             while j < n and s[j] != ">":
                 j += 1
             if j < n and s[j] == ">":
@@ -233,8 +230,6 @@ def normalize_desc_text(raw: Any) -> str:
         i += 1
 
     s = "".join(out)
-
-    # Normalize line breaks + trim
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     return s.strip()
 
@@ -262,11 +257,6 @@ def payment_integrity_status(
     term3: int,
     full: int,
 ) -> Tuple[str, str, int]:
-    """
-    Returns (status, message, balance)
-    status: BALANCED | UNALLOCATED | OVER | INFO
-    balance = grand_total - total_scheduled
-    """
     total_scheduled = int(dp1) + int(term2) + int(term3) + int(full)
     balance = int(grand_total) - total_scheduled
 
@@ -324,6 +314,12 @@ def initialize_session_state() -> None:
         "cat_filter": "All",
         "sort_filter": "Price: High",
         "search_filter": "",
+
+        # Bundling UI state
+        "bundle_sel": [],
+        "bundle_title": "",
+        "bundle_price_mode": "Sum of selected",
+        "bundle_custom_price": 0,
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
@@ -339,9 +335,22 @@ def _cleanup_qty_keys_for_item(item: Dict[str, Any]) -> None:
     if qty_key in st.session_state:
         del st.session_state[qty_key]
 
+def _cleanup_bundle_price_key_for_item(item: Dict[str, Any]) -> None:
+    item_id = item.get("__id")
+    if not item_id:
+        return
+    k = f"bundle_price_{item_id}"
+    if k in st.session_state:
+        del st.session_state[k]
+
 def cleanup_all_qty_keys() -> None:
     for k in list(st.session_state.keys()):
         if str(k).startswith("qty_"):
+            del st.session_state[k]
+
+def cleanup_all_bundle_price_keys() -> None:
+    for k in list(st.session_state.keys()):
+        if str(k).startswith("bundle_price_"):
             del st.session_state[k]
 
 def sync_qty_widget_state(items: List[Dict[str, Any]]) -> None:
@@ -354,8 +363,25 @@ def sync_qty_widget_state(items: List[Dict[str, Any]]) -> None:
         if not item_id:
             continue
         qty_key = f"qty_{item_id}"
-        desired = max(MIN_QTY, safe_int(item.get("Qty", 1), 1))
-        st.session_state[qty_key] = desired
+        if item.get("_bundle"):
+            st.session_state[qty_key] = 1
+        else:
+            desired = max(MIN_QTY, safe_int(item.get("Qty", 1), 1))
+            st.session_state[qty_key] = desired
+
+def sync_bundle_price_widget_state(items: List[Dict[str, Any]]) -> None:
+    """
+    Seed bundle price widgets before render so no 'modified after instantiation'.
+    """
+    for item in items:
+        if not item.get("_bundle"):
+            continue
+        item_id = item.get("__id")
+        if not item_id:
+            continue
+        k = f"bundle_price_{item_id}"
+        if k not in st.session_state:
+            st.session_state[k] = safe_int(item.get("Price", 0), 0)
 
 
 # --- Callbacks ---
@@ -393,10 +419,19 @@ def cb_update_item_qty(item_index: int, widget_key: str) -> None:
     if not (0 <= item_index < len(st.session_state["inv_items"])):
         return
 
+    item = st.session_state["inv_items"][item_index]
+
+    # Guard: bundle qty always 1
+    if item.get("_bundle"):
+        item["Qty"] = 1
+        item["Total"] = safe_float(item.get("Price", 0)) * 1
+        st.session_state[widget_key] = 1
+        invalidate_pdf()
+        return
+
     raw_value = st.session_state.get(widget_key, 1)
     new_qty = max(MIN_QTY, safe_int(raw_value, 1))
 
-    item = st.session_state["inv_items"][item_index]
     item["Qty"] = new_qty
     item["Total"] = safe_float(item.get("Price", 0)) * new_qty
     invalidate_pdf()
@@ -407,7 +442,21 @@ def cb_delete_item(item_index: int) -> None:
 
     item = st.session_state["inv_items"][item_index]
     _cleanup_qty_keys_for_item(item)
+    _cleanup_bundle_price_key_for_item(item)
     st.session_state["inv_items"].pop(item_index)
+    invalidate_pdf()
+
+def cb_update_bundle_price(item_index: int, widget_key: str) -> None:
+    if not (0 <= item_index < len(st.session_state["inv_items"])):
+        return
+    item = st.session_state["inv_items"][item_index]
+    if not item.get("_bundle"):
+        return
+
+    v = max(0, safe_int(st.session_state.get(widget_key, 0), 0))
+    item["Price"] = float(v)
+    item["Qty"] = 1
+    item["Total"] = float(v)
     invalidate_pdf()
 
 def cb_auto_split_payments(grand_total: float) -> None:
@@ -445,7 +494,149 @@ def cb_reset_transaction() -> None:
     st.session_state["pay_term3"] = 0
     st.session_state["pay_full"] = 0
     cleanup_all_qty_keys()
+    cleanup_all_bundle_price_keys()
     st.toast("Transaction cleared.", icon="🧹")
+
+# --- Bundling callbacks ---
+
+def _cart_non_bundle_items() -> List[Dict[str, Any]]:
+    out = []
+    for it in st.session_state.get("inv_items", []):
+        if not it.get("_bundle"):
+            out.append(it)
+    return out
+
+def _cart_bundle_items() -> List[Dict[str, Any]]:
+    out = []
+    for it in st.session_state.get("inv_items", []):
+        if it.get("_bundle"):
+            out.append(it)
+    return out
+
+def cb_merge_selected_from_ui() -> None:
+    sel_ids: List[str] = st.session_state.get("bundle_sel", []) or []
+    sel_ids = [str(x) for x in sel_ids if str(x)]
+    if len(sel_ids) < 2:
+        st.toast("Select at least 2 items to merge.", icon="⚠️")
+        return
+
+    # map id -> item
+    items = st.session_state.get("inv_items", [])
+    id_to_item = {str(it.get("__id")): it for it in items}
+
+    selected: List[Dict[str, Any]] = []
+    for sid in sel_ids:
+        it = id_to_item.get(sid)
+        if not it:
+            continue
+        if it.get("_bundle"):
+            st.toast("Cannot merge a bundle item.", icon="⚠️")
+            return
+        selected.append(it)
+
+    if len(selected) < 2:
+        st.toast("Selected items not found.", icon="⚠️")
+        return
+
+    # default title
+    title = (st.session_state.get("bundle_title") or "").strip()
+    if not title:
+        # auto title "A + B + C"
+        names = [str(x.get("Description", "")).strip() for x in selected]
+        names = [n for n in names if n]
+        title = "Bundling: " + " + ".join(names[:3]) + ("..." if len(names) > 3 else "")
+
+    mode = st.session_state.get("bundle_price_mode") or "Sum of selected"
+    if mode == "Custom":
+        price = float(max(0, safe_int(st.session_state.get("bundle_custom_price", 0), 0)))
+    else:
+        # Sum of selected (respect qty)
+        price = 0.0
+        for it in selected:
+            price += safe_float(it.get("Price", 0)) * max(1, safe_int(it.get("Qty", 1), 1))
+
+    # merged details
+    merged_lines: List[str] = []
+    for it in selected:
+        nm = str(it.get("Description", "")).strip()
+        if nm:
+            merged_lines.append(nm)
+        det = normalize_desc_text(it.get("Details", ""))
+        det_lines = desc_to_lines(det)
+        for ln in det_lines:
+            merged_lines.append(f"- {ln}")
+        merged_lines.append("")  # spacer
+    merged_details = "\n".join([x for x in merged_lines]).strip()
+
+    # remove selected from cart
+    remaining: List[Dict[str, Any]] = []
+    selected_id_set = set(sel_ids)
+    for it in st.session_state["inv_items"]:
+        if str(it.get("__id")) in selected_id_set:
+            _cleanup_qty_keys_for_item(it)
+            _cleanup_bundle_price_key_for_item(it)
+        else:
+            remaining.append(it)
+
+    # bundle item
+    bundle_item = {
+        "__id": str(uuid4()),
+        "_row_id": "bundle:" + str(uuid4()),
+        "Description": title,
+        "Details": merged_details,
+        "Price": float(price),
+        "Qty": 1,
+        "Total": float(price),
+        "_bundle": True,
+        "_bundle_src": [dict(x) for x in selected],  # store shallow copies for unmerge
+    }
+
+    st.session_state["inv_items"] = remaining + [bundle_item]
+
+    # reset UI selection
+    st.session_state["bundle_sel"] = []
+    st.session_state["bundle_title"] = ""
+    st.session_state["bundle_custom_price"] = 0
+
+    invalidate_pdf()
+    st.toast("Bundling created.", icon="✅")
+
+def cb_unmerge_bundle(bundle_id: str) -> None:
+    bundle_id = str(bundle_id)
+    items = st.session_state.get("inv_items", [])
+    new_items: List[Dict[str, Any]] = []
+    restored: List[Dict[str, Any]] = []
+
+    for it in items:
+        if str(it.get("__id")) == bundle_id and it.get("_bundle"):
+            restored = it.get("_bundle_src") or []
+            _cleanup_qty_keys_for_item(it)
+            _cleanup_bundle_price_key_for_item(it)
+        else:
+            new_items.append(it)
+
+    if not restored:
+        st.toast("Nothing to unmerge.", icon="ℹ️")
+        return
+
+    # restore original items (make sure they still have required keys)
+    for r in restored:
+        # If something misses __id (shouldn't), re-add
+        if "__id" not in r or not str(r.get("__id")):
+            r["__id"] = str(uuid4())
+        # ensure Total consistent
+        qty = max(1, safe_int(r.get("Qty", 1), 1))
+        r["Qty"] = qty
+        r["Total"] = safe_float(r.get("Price", 0)) * qty
+        # remove bundle metadata if any
+        if "_bundle" in r:
+            del r["_bundle"]
+        if "_bundle_src" in r:
+            del r["_bundle_src"]
+
+    st.session_state["inv_items"] = new_items + restored
+    invalidate_pdf()
+    st.toast("Bundling reverted.", icon="↩️")
 
 
 # ==============================================================================
@@ -532,7 +723,7 @@ def render_admin_panel(grand_total: float) -> None:
 
 def _filter_and_sort_packages(packages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cat_filter = st.session_state.get("cat_filter", "All")
-    sort_filter = st.session_state.get("sort_filter", "Price: Highest")
+    sort_filter = st.session_state.get("sort_filter", "Price: High")
     search_query = (st.session_state.get("search_filter", "") or "").lower().strip()
 
     filtered = list(packages)
@@ -546,7 +737,6 @@ def _filter_and_sort_packages(packages: List[Dict[str, Any]]) -> List[Dict[str, 
     if sort_filter == "Price: Low":
         filtered.sort(key=lambda x: safe_float(x.get("price")))
     else:
-        # default Price: High
         filtered.sort(key=lambda x: safe_float(x.get("price")), reverse=True)
 
     return filtered
@@ -577,40 +767,25 @@ def render_catalog_section(packages: List[Dict[str, Any]]) -> None:
                 name = row.get("name", "Unnamed")
                 price = safe_float(row.get("price"))
 
-                # FIX: normalize <br> so it won't show literal in catalog
                 desc_clean = normalize_desc_text(row.get("description", ""))
                 lines = desc_to_lines(desc_clean)
-                
-                # preview 2 baris: pakai hasil parsing kita dulu (paling reliable)
+
                 if lines:
                     preview_text = "\n".join(lines[:2])
                 else:
-                    # fallback: kalau desc kosong banget, baru pakai _desc_meta preview
                     preview, _, _ = _desc_meta(desc_clean, max_lines=2)
                     preview_text = str(preview or "No details.").strip()
 
                 preview_html = sanitize_text(preview_text).replace("\n", "<br/>")
-                
-                tooltip_html = ""
-                if lines:
-                    # kalau cuma 1-2 baris, tooltip tetap boleh tampil (consistency)
-                    full_desc = "".join([f"<div>• {sanitize_text(l)}</div>" for l in lines])
-                    tooltip_html = (
-                        "<div class='tip'><b>📋 Details</b>"
-                        f"<div style='margin-top:6px;'>{full_desc}</div></div>"
-                    )    
 
-                # escape, tapi newline kita ubah jadi <br/> supaya keliatan enter di card
-                preview_html = sanitize_text(preview_text).replace("\n", "<br/>")
                 tooltip_html = ""
                 if lines:
-                    # kalau cuma 1-2 baris, tooltip tetap boleh tampil (consistency)
                     full_desc = "".join([f"<div>• {sanitize_text(l)}</div>" for l in lines])
                     tooltip_html = (
                         "<div class='tip'><b>📋 Details</b>"
                         f"<div style='margin-top:6px;'>{full_desc}</div></div>"
                     )
-                    
+
                 st.markdown(
                     f"""
                     <div class="card">
@@ -635,9 +810,85 @@ def render_catalog_section(packages: List[Dict[str, Any]]) -> None:
                     args=(row,),
                 )
 
+def render_bundling_panel() -> None:
+    # show bundling controls only if at least 2 non-bundle items exist
+    non_bundle = _cart_non_bundle_items()
+    bundles = _cart_bundle_items()
+
+    with st.expander("✨ Bundling (Merge Items)", expanded=False):
+        st.caption("Pilih 2+ item di cart → merge jadi 1 bundling. Harga bisa sum otomatis atau custom.")
+
+        if len(non_bundle) < 2:
+            st.info("Add at least 2 items to enable bundling.")
+        else:
+            def _fmt_item_id(item_id: str) -> str:
+                # display label for multiselect
+                for it in non_bundle:
+                    if str(it.get("__id")) == str(item_id):
+                        nm = str(it.get("Description", "")).strip() or "Item"
+                        pr = rupiah(safe_float(it.get("Price", 0)))
+                        q = max(1, safe_int(it.get("Qty", 1), 1))
+                        if q > 1:
+                            return f"{nm} — {pr} × {q}"
+                        return f"{nm} — {pr}"
+                return str(item_id)
+
+            options = [str(it.get("__id")) for it in non_bundle if str(it.get("__id"))]
+            st.multiselect(
+                "Select items",
+                options=options,
+                key="bundle_sel",
+                format_func=_fmt_item_id,
+            )
+
+            colA, colB = st.columns([1.3, 1])
+            colA.text_input(
+                "Bundle title (optional)",
+                key="bundle_title",
+                placeholder="BUNDLING FULL DAY + TRD Ceremonial (at Exhibition)",
+            )
+            colB.selectbox(
+                "Price mode",
+                ["Sum of selected", "Custom"],
+                key="bundle_price_mode",
+            )
+
+            if st.session_state.get("bundle_price_mode") == "Custom":
+                st.number_input(
+                    "Custom price",
+                    min_value=0,
+                    step=BUNDLE_PRICE_STEP,
+                    key="bundle_custom_price",
+                )
+
+            st.button(
+                "✨ Merge Selected",
+                type="primary",
+                use_container_width=True,
+                on_click=cb_merge_selected_from_ui,
+            )
+
+        if bundles:
+            st.divider()
+            st.caption("Existing bundle(s)")
+            for b in bundles:
+                bid = str(b.get("__id"))
+                nm = str(b.get("Description", "Bundling"))
+                st.write(f"• **{nm}** — {rupiah(safe_float(b.get('Price', 0)))}")
+                st.button(
+                    "↩️ Unmerge",
+                    key=f"unmerge_{bid}",
+                    use_container_width=True,
+                    on_click=cb_unmerge_bundle,
+                    args=(bid,),
+                )
+
 def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> None:
     with st.container(border=True):
         st.markdown("<div class='blk-title'>🧾 POS</div>", unsafe_allow_html=True)
+
+        # Bundling panel
+        render_bundling_panel()
 
         st.markdown(
             "<div class='pos-head'>"
@@ -655,16 +906,43 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
             st.info("Cart is empty.")
         else:
             sync_qty_widget_state(items)
+            sync_bundle_price_widget_state(items)
 
             for idx, item in enumerate(items):
                 item_id = item.get("__id", str(idx))
+                is_bundle = bool(item.get("_bundle"))
 
                 st.markdown("<div class='row'>", unsafe_allow_html=True)
                 col1, col2, col3, col4 = st.columns(POS_COLUMN_RATIOS, gap="small", vertical_alignment="center")
 
                 with col1:
-                    st.markdown(f"<div class='it'>{sanitize_text(item.get('Description', ''))}</div>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='meta'>@ {sanitize_text(rupiah(safe_float(item.get('Price'))))}</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div class='it'>{sanitize_text(item.get('Description', ''))}</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    # show base meta
+                    if is_bundle:
+                        st.markdown(
+                            f"<div class='meta'>BUNDLE • Price editable</div>",
+                            unsafe_allow_html=True,
+                        )
+                        # bundle price editor (compact)
+                        bp_key = f"bundle_price_{item_id}"
+                        st.number_input(
+                            "Bundle Price",
+                            min_value=0,
+                            step=BUNDLE_PRICE_STEP,
+                            key=bp_key,
+                            label_visibility="collapsed",
+                            on_change=cb_update_bundle_price,
+                            args=(idx, bp_key),
+                        )
+                    else:
+                        st.markdown(
+                            f"<div class='meta'>@ {sanitize_text(rupiah(safe_float(item.get('Price'))))}</div>",
+                            unsafe_allow_html=True,
+                        )
 
                 with col2:
                     qty_key = f"qty_{item_id}"
@@ -674,6 +952,7 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
                         step=1,
                         key=qty_key,
                         label_visibility="collapsed",
+                        disabled=is_bundle,  # bundle qty locked
                         on_change=cb_update_item_qty,
                         args=(idx, qty_key),
                     )
