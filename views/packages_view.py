@@ -5,6 +5,7 @@ from modules import db
 from ui.components import page_header, section, danger_container
 from ui.formatters import rupiah
 
+
 # =========================================================
 # 0) CONSTANTS
 # =========================================================
@@ -13,7 +14,7 @@ CATEGORY_ALL = "All"
 
 # Format Sort: (key_dictionary, is_ascending)
 SORT_OPTIONS = {
-    "Newest": ("id", False),          # ID besar = baru (Descending)
+
     "Price: High → Low": ("price", False),
     "Price: Low → High": ("price", True),
     "Name: A → Z": ("name", True),
@@ -131,7 +132,7 @@ def _render_package_form(data: dict | None = None, key_prefix: str = "pkg"):
             price = st.number_input(
                 "Price (IDR)",
                 min_value=0,
-                step=50000,
+                step=250000,
                 value=defaults["price"],
                 key=f"{key_prefix}_price",
             )
@@ -341,13 +342,13 @@ def _render_grid(data: list, cols_count: int, page_size: int = PAGE_SIZE_DEFAULT
 
             a1, a2 = st.columns([1, 1])
             with a1:
-                if st.button("✏️ Edit", key=f"grid_edit_{row['id']}", use_container_width=True):
+                if st.button("✏️", key=f"grid_edit_{row['id']}", use_container_width=True):
                     st.session_state["_pkg_modal"] = ("edit", int(row['id']))
                     st.rerun()
 
             with a2:
                 with danger_container(key=f"danger_card_{row['id']}"):
-                    if st.button("🗑️ Delete", key=f"grid_del_{row['id']}", use_container_width=True):
+                    if st.button("🗑️", key=f"grid_del_{row['id']}", use_container_width=True):
                         st.session_state["_pkg_modal"] = ("delete", int(row['id']))
                         st.rerun()
 
@@ -360,7 +361,7 @@ def _render_grid(data: list, cols_count: int, page_size: int = PAGE_SIZE_DEFAULT
 def render_page():
     page_header(
         "📦 Packages Database",
-        "Kelola katalog harga dengan rapi — konsisten nama, harga, dan itemnya.",
+        "Streamline your service catalog. Ensure consistency in package names, pricing, and details for accurate invoicing.",
     )
 
     data = _safe_load_data() # Sekarang balikin List, bukan DataFrame
