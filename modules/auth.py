@@ -46,7 +46,6 @@ def _get_secrets():
     }
     return conf
 
-@st.cache_resource
 def get_cookie_manager():
     return stx.CookieManager(key="prod_auth_manager_v2")
 
