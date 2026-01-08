@@ -16,19 +16,21 @@ from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
 # Helpers
 # =========================================================
 def _fmt_currency(val) -> str:
-    """
-    Format angka ke Rupiah. 
-    Jika 0 atau None -> Return 'FREE' (tanpa Rp).
-    """
     try:
         n = float(val)
     except:
         n = 0
-    
     if n == 0:
         return "FREE"
-    
-    # Rounding & Formatting
+    return f"Rp {int(round(n)):,}".replace(",", ".")
+
+def _fmt_payment_row(val) -> str:
+    try:
+        n = float(val)
+    except:
+        n = 0
+    if n == 0:
+        return "-" 
     return f"Rp {int(round(n)):,}".replace(",", ".")
 
 def _safe_str(x) -> str:
@@ -67,17 +69,22 @@ def _try_draw_logo(c: canvas.Canvas, x, y, w, h, logo_path: str):
     c.setFont("Helvetica-Bold", 14)
     c.drawCentredString(x + w / 2, y + h / 2 - 5, "ORBIT")
 
-def _draw_wrapped_text(c, text, x, y, max_w, font="Helvetica", font_size=7, leading=3*mm):
-    c.setFont(font, font_size)
-    for raw in (text or "").split("\n"):
-        line = raw.strip()
-        if not line:
-            y -= leading
-            continue
-        for wline in simpleSplit(line, font, font_size, max_w):
-            c.drawString(x, y, wline)
-            y -= leading
-    return y
+def _calculate_dynamic_font(text, max_w):
+    if not text:
+        return 7, 3*mm
+    lines_9 = []
+    for raw in text.split('\n'):
+        if raw.strip():
+            lines_9.extend(simpleSplit(raw.strip(), "Helvetica", 9, max_w))
+    if len(lines_9) <= 2:
+        return 9, 4.5*mm 
+    lines_8 = []
+    for raw in text.split('\n'):
+        if raw.strip():
+            lines_8.extend(simpleSplit(raw.strip(), "Helvetica", 8, max_w))
+    if len(lines_8) <= 5:
+        return 8, 4*mm 
+    return 7, 3*mm
 
 def _details_to_bullets(det_txt: str, indent=False) -> str:
     det_txt = _safe_str(det_txt)
@@ -88,19 +95,93 @@ def _details_to_bullets(det_txt: str, indent=False) -> str:
     return "<br/>".join([f"{bullet} {l}" for l in lines])
 
 def _draw_underlined_header(c, text, x, y, font="Helvetica-Bold", size=9):
-    """Menggambar text bold dengan garis bawah custom."""
     c.setFillColor(colors.black)
     c.setFont(font, size)
     c.drawString(x, y, text)
-    
-    # Hitung lebar text untuk garis bawah
     text_w = c.stringWidth(text, font, size)
     c.setLineWidth(1)
     c.setStrokeColor(colors.black)
-    # Gambar garis sedikit di bawah text
     c.line(x, y - 3, x + text_w, y - 3)
+    return y - 5 * mm 
+
+# Imports for font registration
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+def _draw_footer_contact(c, W):
+    bar_h = 10 * mm
+    c.setFillColor(colors.HexColor("#1a1a1a"))
+    c.rect(0, 0, W, bar_h, fill=1, stroke=0)
     
-    return y - 5 * mm # Return cursor baru
+    # 1. Font Setup
+    emoji_font = "Helvetica"
+    try:
+        pdfmetrics.registerFont(TTFont('SegoeEmoji', 'C:\\Windows\\Fonts\\seguiemj.ttf'))
+        emoji_font = 'SegoeEmoji'
+    except:
+        pass
+        
+    # 2. Define Data items as SINGLE STRINGS
+    # User Request: "testing jadi 1 baris aja gausah dipisah... itu yg bikin error"
+    # Merging icon and text into one string guarantees they are on the same baseline.
+    items = [
+        "📍 Jl. Panembakan Gg Sukamaju 15 No. 3, Kota Cimahi",
+        "📧 theorbitphoto@gmail.com",
+        "📸 @theorbitphoto",
+        "📞 0813-2333-1506"
+    ]
+    
+    # 3. Font Setup
+    # Must use a font that supports BOTH Emoji and Text for the single string.
+    # Segoe UI Emoji is perfect for this on Windows.
+    use_font = emoji_font if emoji_font != "Helvetica" else "Helvetica"
+    font_size = 7
+    
+    sep_str = "     |     "
+    
+    # 4. Measure Total Width
+    total_w = 0
+    item_widths = [] 
+    
+    sep_w = c.stringWidth(sep_str, use_font, font_size)
+    
+    for txt in items:
+        # Measure entire string (Icon + Text) at once
+        try:
+            w_t = c.stringWidth(txt, use_font, font_size)
+        except:
+             # Fallback if measurer fails on weird chars
+            w_t = c.stringWidth(txt, "Helvetica", font_size)
+            
+        item_widths.append(w_t)
+        total_w += w_t
+        
+    # Add separators width
+    if len(items) > 1:
+        total_w += sep_w * (len(items) - 1)
+    
+    # 5. Draw Loop
+    # Vertical Alignment: 
+    # Center of 10mm bar. 
+    # 4mm is a safe baseline for 7pt text.
+    y_baseline = 4.0 * mm 
+    
+    cur_x = (W - total_w) / 2
+    
+    c.setFillColor(colors.white)
+    c.setFont(use_font, font_size)
+    
+    for i, txt in enumerate(items):
+        w_t = item_widths[i]
+        
+        # Draw the single string (Icon + Text naturally aligned)
+        c.drawString(cur_x, y_baseline, txt)
+        cur_x += w_t
+        
+        # Draw Separator
+        if i < len(items) - 1:
+            c.drawString(cur_x, y_baseline, sep_str)
+            cur_x += sep_w
 
 # =========================================================
 # MAIN GENERATOR
@@ -114,6 +195,7 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     BLACK = colors.HexColor("#1a1a1a")
     DARK_GRAY = colors.HexColor("#4a4a4a")
     WHITE = colors.white
+    RED = colors.HexColor("#b91c1c")
     LINE_COLOR = colors.HexColor("#000000") 
 
     margin = 15 * mm
@@ -139,13 +221,19 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     subtotal = float(meta.get("subtotal", 0))
     cashback = float(meta.get("cashback", 0))
 
-    payment_plan = []
-    if meta.get("pay_dp1", 0) > 0: payment_plan.append(("Down Payment", meta["pay_dp1"]))
-    if meta.get("pay_term2", 0) > 0: payment_plan.append(("Payment 2", meta["pay_term2"]))
-    if meta.get("pay_term3", 0) > 0: payment_plan.append(("Payment 3", meta["pay_term3"]))
-    if meta.get("pay_full", 0) > 0: payment_plan.append(("Pelunasan", meta["pay_full"]))
+    p_dp1 = float(meta.get("pay_dp1", 0))
+    p_t2 = float(meta.get("pay_term2", 0))
+    p_t3 = float(meta.get("pay_term3", 0))
+    p_full = float(meta.get("pay_full", 0))
 
-    total_paid_scheduled = sum(p[1] for p in payment_plan)
+    payment_plan = [
+        ("Down Payment", p_dp1),
+        ("Payment 2", p_t2),
+        ("Payment 3", p_t3),
+        ("Pelunasan", p_full),
+    ]
+
+    total_paid_scheduled = sum(amt for _, amt in payment_plan)
     remaining = max(0, grand_total - total_paid_scheduled)
 
     # =========================================================
@@ -197,7 +285,7 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
 
 
     # =========================================================
-    # 3. ITEM TABLE (MAIN)
+    # 3. ITEM TABLE
     # =========================================================
     table_y_start = y_meta - 16 * mm
 
@@ -205,7 +293,6 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     style_desc = ParagraphStyle("desc", parent=styles["Normal"], fontName="Helvetica", fontSize=8, leading=10, textColor=BLACK)
     style_header = ParagraphStyle("header", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=8, textColor=WHITE, alignment=TA_CENTER)
 
-    # Headers
     headers = [
         Paragraph("NO", style_header),
         Paragraph("ITEM DESCRIPTION", ParagraphStyle("h_desc", parent=style_header, alignment=TA_LEFT)),
@@ -215,10 +302,15 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     ]
     
     data = [headers]
-    row_idx = 1
     item_no = 1
 
     for it in (items or []):
+        price_val = it.get('Price', 0)
+        total_val = it.get('Total', 0)
+        
+        price_str = "FREE" if price_val == 0 else f"{_fmt_currency(price_val)}"
+        total_str = "FREE" if total_val == 0 else f"{_fmt_currency(total_val)}"
+
         is_bundle = bool(it.get("_bundle"))
         
         if not is_bundle:
@@ -227,14 +319,7 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
             cell_xml = f"<b>{desc_txt}</b>"
             bullets = _details_to_bullets(det_txt)
             if bullets: cell_xml += f"<br/><font size=7 color='#555555'>{bullets}</font>"
-            
-            data.append([
-                str(item_no),
-                Paragraph(cell_xml, style_desc),
-                _fmt_currency(it.get('Price', 0)), # Use new formatter
-                str(int(it.get("Qty", 1))),
-                _fmt_currency(it.get('Total', 0))  # Use new formatter
-            ])
+            data.append([str(item_no), Paragraph(cell_xml, style_desc), price_str, str(int(it.get("Qty", 1))), total_str])
         else:
             bundle_title = _safe_str(it.get("Description", "BUNDLING")).strip()
             src_items = it.get("_bundle_src", [])
@@ -246,17 +331,8 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
                 bullets = _details_to_bullets(s_det, indent=True)
                 if bullets: full_desc_html += f"<font size=7 color='#666666'>{bullets}</font><br/>"
                 full_desc_html += "<br/>"
-
-            data.append([
-                str(item_no),
-                Paragraph(full_desc_html, style_desc),
-                _fmt_currency(it.get('Price', 0)),
-                "1",
-                _fmt_currency(it.get('Total', 0))
-            ])
-        
+            data.append([str(item_no), Paragraph(full_desc_html, style_desc), price_str, "1", total_str])
         item_no += 1
-        row_idx += 1
 
     col_widths = [10 * mm, 95 * mm, 30 * mm, 12 * mm, 30 * mm]
     
@@ -280,165 +356,207 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     w_table, h_table = t.wrapOn(c, W, H)
     t.drawOn(c, margin, table_y_start - h_table)
     
-    cursor_y = table_y_start - h_table
+    # Cursor moves to bottom of the table
+    cursor_y_after_table = table_y_start - h_table 
 
     # =========================================================
-    # 4. SUMMARY SECTION (ESTETIK BLACK BAR)
+    # 4. SUMMARY SECTION (SEPARATE BUT ATTACHED)
     # =========================================================
-    summary_data = []
-    
-    # 1. TOTAL (Black Bar)
-    # Gunakan 'TOTAL:' sebagai label untuk subtotal agar match dengan referensi
-    summary_data.append(['', '', 'TOTAL:', '', _fmt_currency(subtotal)])
-    
-    # 2. Cashback (White Bar)
+    summary_rows = []
+    row_meta = [] 
+
+    # 1. TOTAL (Filled Black)
+    summary_rows.append(["", "", "TOTAL:", "", _fmt_currency(subtotal)])
+    row_meta.append("total")
+
+    # 2. Cashback
     if cashback > 0:
-        summary_data.append(['', '', 'Cashback:', '', f"- {_fmt_currency(cashback)}"])
-    
-    # 3. GRAND TOTAL (Black Bar, Big Font)
-    summary_data.append(['', '', 'GRAND TOTAL:', '', _fmt_currency(grand_total)])
-    
-    # 4. Payment History (Plain)
-    if payment_plan:
-        summary_data.append(['', '', 'Payment History:', '', '']) # Spacer header row
-        for label, amt in payment_plan:
-             summary_data.append(['', '', label, '', _fmt_currency(amt)])
-             
-    # 5. Remaining (Plain but Bold)
-    summary_data.append(['', '', 'SISA TAGIHAN:', '', _fmt_currency(remaining)])
+        summary_rows.append(["", "", "Cashback:", "", f"- {_fmt_currency(cashback)}"])
+        row_meta.append("cashback")
 
-    t_sum = Table(summary_data, colWidths=col_widths)
-    
+    # 3. GRAND TOTAL (Filled Black)
+    summary_rows.append(["", "", "GRAND TOTAL:", "", _fmt_currency(grand_total)])
+    row_meta.append("grand")
+
+    # 4. Payment History (Small)
+    if payment_plan:
+        summary_rows.append(["", "", "PAYMENT HISTORY", "", ""])
+        row_meta.append("ph_header")
+        for label, amt in payment_plan:
+            val_str = f"- {_fmt_payment_row(amt)}" if amt > 0 else "-"
+            summary_rows.append(["", "", label + ":", "", val_str])
+            row_meta.append("ph_item")
+
+    # 5. Remaining
+    rem_str = "LUNAS" if remaining <= 0 else _fmt_currency(remaining)
+    summary_rows.append(["", "", "SISA TAGIHAN (REMAINING):", "", rem_str])
+    row_meta.append("remaining")
+
+    # Gunakan colWidths SAMA dengan tabel item agar LURUS
+    t_sum = Table(summary_rows, colWidths=col_widths)
+
     sum_styles = [
-        # Alignments (Tetap dijaga agar lurus dengan tabel atas)
-        ("ALIGN", (2, 0), (2, -1), "RIGHT"), # Label
-        ("ALIGN", (4, 0), (4, -1), "RIGHT"), # Value
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        
-        # Default Padding
-        ("topPadding", (0, 0), (-1, -1), 5),
-        ("bottomPadding", (0, 0), (-1, -1), 5),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+        ("ALIGN", (4, 0), (4, -1), "RIGHT"),
     ]
 
-    # SPANNING (Merge Col 2 & 3 for Label)
-    for r in range(len(summary_data)):
+    # Merge col 2 & 3 for Labels
+    for r in range(len(summary_rows)):
         sum_styles.append(("SPAN", (2, r), (3, r)))
 
-    # --- APPLYING THE "AESTHETIC" STYLES ---
-    
-    # 1. TOTAL ROW (Subtotal) -> BLACK BG, WHITE TEXT, BOLD
-    sum_styles.append(("BACKGROUND", (2, 0), (4, 0), BLACK))
-    sum_styles.append(("TEXTCOLOR", (2, 0), (4, 0), WHITE))
-    sum_styles.append(("FONTNAME", (2, 0), (4, 0), "Helvetica-Bold"))
-    
-    # 2. CASHBACK ROW -> Bold Label
-    if cashback > 0:
-        sum_styles.append(("FONTNAME", (2, 1), (4, 1), "Helvetica-Bold"))
-    
-    # 3. GRAND TOTAL ROW -> BLACK BG, WHITE TEXT, BIGGER FONT
-    gt_idx = 2 if cashback > 0 else 1
-    sum_styles.append(("BACKGROUND", (2, gt_idx), (4, gt_idx), BLACK))
-    sum_styles.append(("TEXTCOLOR", (2, gt_idx), (4, gt_idx), WHITE))
-    sum_styles.append(("FONTNAME", (2, gt_idx), (4, gt_idx), "Helvetica-Bold"))
-    sum_styles.append(("FONTSIZE", (2, gt_idx), (4, gt_idx), 11)) # Bigger Font
-    sum_styles.append(("topPadding", (2, gt_idx), (4, gt_idx), 8))
-    sum_styles.append(("bottomPadding", (2, gt_idx), (4, gt_idx), 8))
-
-    # 4. Payment History Styling
-    if payment_plan:
-        ph_idx = gt_idx + 1
-        sum_styles.append(("FONTNAME", (2, ph_idx), (4, ph_idx), "Helvetica-BoldOblique"))
-        sum_styles.append(("TEXTCOLOR", (2, ph_idx), (4, ph_idx), DARK_GRAY))
-        # Isi history (baris setelah header history sampai sebelum remaining)
-        start_hist = ph_idx + 1
-        end_hist = len(summary_data) - 2 # -1 karena last row is remaining
-        if start_hist <= end_hist:
-            sum_styles.append(("FONTNAME", (2, start_hist), (4, end_hist), "Helvetica"))
-            sum_styles.append(("TEXTCOLOR", (2, start_hist), (4, end_hist), BLACK))
-
-    # 5. Remaining Balance (Last Row) -> RED & BOLD
-    last_row = len(summary_data) - 1
-    sum_styles.append(("FONTNAME", (2, last_row), (4, last_row), "Helvetica-Bold"))
-    sum_styles.append(("TEXTCOLOR", (2, last_row), (4, last_row), colors.HexColor("#b91c1c"))) 
-    sum_styles.append(("topPadding", (2, last_row), (4, last_row), 8))
+    # Style per row type
+    for r, typ in enumerate(row_meta):
+        if typ == "total":
+            sum_styles += [
+                ("BACKGROUND", (2, r), (4, r), BLACK),
+                ("TEXTCOLOR", (2, r), (4, r), WHITE),
+                ("FONTNAME", (2, r), (4, r), "Helvetica-Bold"),
+                # --- UKURAN FONT TOTAL (BESAR) ---
+                ("FONTSIZE", (2, r), (4, r), 10), 
+                ("TOPPADDING", (0, r), (-1, r), 6), 
+                ("BOTTOMPADDING", (0, r), (-1, r), 6),
+            ]
+        elif typ == "grand":
+            sum_styles += [
+                ("BACKGROUND", (2, r), (4, r), BLACK),
+                ("TEXTCOLOR", (2, r), (4, r), WHITE),
+                ("FONTNAME", (2, r), (4, r), "Helvetica-Bold"),
+                # --- UKURAN FONT GRAND TOTAL (LEBIH BESAR) ---
+                ("FONTSIZE", (2, r), (4, r), 12),
+                ("TOPPADDING", (0, r), (-1, r), 8), 
+                ("BOTTOMPADDING", (0, r), (-1, r), 8),
+            ]
+        elif typ == "cashback":
+            sum_styles += [
+                ("TEXTCOLOR", (2, r), (4, r), DARK_GRAY),
+                ("FONTNAME", (2, r), (4, r), "Helvetica-Bold"),
+            ]
+        elif typ == "ph_header":
+            sum_styles += [
+                ("TEXTCOLOR", (2, r), (4, r), DARK_GRAY),
+                ("FONTNAME", (2, r), (4, r), "Helvetica-BoldOblique"),
+                ("TOPPADDING", (0, r), (-1, r), 8), 
+                ("BOTTOMPADDING", (0, r), (-1, r), 2),
+            ]
+        elif typ == "ph_item":
+            sum_styles += [
+                ("TEXTCOLOR", (2, r), (4, r), DARK_GRAY),
+                ("FONTSIZE", (0, r), (-1, r), 7.5),
+                ("TOPPADDING", (0, r), (-1, r), 1),
+                ("BOTTOMPADDING", (0, r), (-1, r), 1),
+            ]
+        elif typ == "remaining":
+            sum_styles += [
+                ("TEXTCOLOR", (2, r), (4, r), RED),
+                ("FONTNAME", (2, r), (4, r), "Helvetica-Bold"),
+                ("TOPPADDING", (0, r), (-1, r), 8),
+            ]
 
     t_sum.setStyle(TableStyle(sum_styles))
     
+    # Draw Summary - ZERO GAP
     w_sum, h_sum = t_sum.wrapOn(c, W, H)
-    t_sum.drawOn(c, margin, cursor_y - h_sum)
+    t_sum.drawOn(c, margin, cursor_y_after_table - h_sum) 
 
-
-    # =========================================================
-    # 5. INFO SECTION (LEFT SIDE - AESTHETIC HEADERS)
-    # =========================================================
-    info_y = cursor_y - 10 
+    # -------------------------------
+    # 5. INFO SECTION (LEFT SIDE)
+    # -------------------------------
+    
+    info_y = cursor_y_after_table - 8 * mm # Jarak dari tabel item
     left_x = margin
     info_w = col_widths[0] + col_widths[1] - 5*mm 
 
-    # --- EVENT DETAILS ---
+    # Event Details
     if wedding_date or venue:
-        # Gambar Header dengan Underline
         info_y = _draw_underlined_header(c, "EVENT DETAILS:", left_x, info_y)
-        
         c.setFont("Helvetica", 9)
         c.setFillColor(BLACK)
-        
-        # Render Date & Venue dengan Label Bold manual (simulasi)
         if wedding_date:
             c.setFont("Helvetica-Bold", 8)
             c.drawString(left_x, info_y, "Date:")
             c.setFont("Helvetica", 8)
             c.drawString(left_x + 10*mm, info_y, wedding_date)
             info_y -= 4 * mm
-            
         if venue:
             c.setFont("Helvetica-Bold", 8)
             c.drawString(left_x, info_y, "Venue:")
             c.setFont("Helvetica", 8)
             c.drawString(left_x + 10*mm, info_y, venue)
-            info_y -= 8 * mm # Extra space after section
+            info_y -= 8 * mm 
             
-    # --- PAYMENT INFO ---
+    # Payment Info
     info_y = _draw_underlined_header(c, "PAYMENT INFO:", left_x, info_y)
-    
     c.setFont("Helvetica", 8)
     c.setFillColor(BLACK)
     
-    # Bank Label Bold
     c.setFont("Helvetica-Bold", 8)
     c.drawString(left_x, info_y, "Bank:")
     c.setFont("Helvetica", 8)
     c.drawString(left_x + 15*mm, info_y, bank_nm)
     info_y -= 4 * mm
     
-    # Acc Label Bold
     c.setFont("Helvetica-Bold", 8)
     c.drawString(left_x, info_y, "Account:")
     c.setFont("Helvetica", 8)
     c.drawString(left_x + 15*mm, info_y, bank_ac)
     info_y -= 4 * mm
     
-    # Name Label Bold
     c.setFont("Helvetica-Bold", 8)
     c.drawString(left_x, info_y, "A/N:")
     c.setFont("Helvetica", 8)
     c.drawString(left_x + 15*mm, info_y, bank_an)
     info_y -= 8 * mm
 
-    # --- TERMS ---
+    # Terms & Conditions (Table Layout for Perfect Hanging Indent)
     if terms_text:
         info_y = _draw_underlined_header(c, "TERMS & CONDITIONS:", left_x, info_y)
-        c.setFillColor(DARK_GRAY)
-        _draw_wrapped_text(c, terms_text, left_x, info_y, max_w=info_w, font="Helvetica", font_size=7, leading=3*mm)
+        
+        # Use a table with 2 columns: Number (Fixed) + Text (Dynamic)
+        num_col_w = 4 * mm
+        text_col_w = info_w - num_col_w
+        
+        # Recalculate font based on narrower text column
+        terms_font_size, terms_leading = _calculate_dynamic_font(terms_text, text_col_w)
+        
+        t_style = ParagraphStyle(
+            'TermsInfo',
+            parent=styles['Normal'],
+            fontName='Helvetica',
+            fontSize=terms_font_size,
+            leading=terms_leading,
+            textColor=DARK_GRAY,
+        )
+
+        lines = [l.strip() for l in terms_text.split('\n') if l.strip()]
+        t_data = []
+        for i, line in enumerate(lines, 1):
+            t_data.append([
+                Paragraph(f"{i}.", t_style),
+                Paragraph(line, t_style)
+            ])
+            
+        t_terms = Table(t_data, colWidths=[num_col_w, text_col_w])
+        t_terms.setStyle(TableStyle([
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('LEFTPADDING', (0,0), (-1,-1), 0),
+            ('RIGHTPADDING', (0,0), (-1,-1), 0),
+            ('TOPPADDING', (0,0), (-1,-1), 0),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+        ]))
+        
+        _, h_t = t_terms.wrapOn(c, info_w, H)
+        t_terms.drawOn(c, left_x, info_y - h_t) 
+        info_y -= h_t 
 
     # =========================================================
-    # 6. FOOTER
+    # 6. FOOTER BAR (BLACK)
     # =========================================================
-    c.setFillColor(colors.HexColor("#9ca3af")) 
-    c.setFont("Helvetica-Oblique", 7)
-    c.drawCentredString(W / 2, 8 * mm, "Thank you for trusting us with your special moments.")
+    _draw_footer_contact(c, W)
 
     c.showPage()
     c.save()
