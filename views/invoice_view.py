@@ -353,35 +353,7 @@ def cleanup_all_bundle_price_keys() -> None:
         if str(k).startswith("bundle_price_"):
             del st.session_state[k]
 
-def sync_qty_widget_state(items: List[Dict[str, Any]]) -> None:
-    """
-    Ensure widget state matches cart item Qty BEFORE widgets are instantiated.
-    Prevents drift after resets/deletes.
-    """
-    for item in items:
-        item_id = item.get("__id")
-        if not item_id:
-            continue
-        qty_key = f"qty_{item_id}"
-        if item.get("_bundle"):
-            st.session_state[qty_key] = 1
-        else:
-            desired = max(MIN_QTY, safe_int(item.get("Qty", 1), 1))
-            st.session_state[qty_key] = desired
 
-def sync_bundle_price_widget_state(items: List[Dict[str, Any]]) -> None:
-    """
-    Seed bundle price widgets before render so no 'modified after instantiation'.
-    """
-    for item in items:
-        if not item.get("_bundle"):
-            continue
-        item_id = item.get("__id")
-        if not item_id:
-            continue
-        k = f"bundle_price_{item_id}"
-        if k not in st.session_state:
-            st.session_state[k] = safe_int(item.get("Price", 0), 0)
 
 
 # --- Callbacks ---
@@ -415,11 +387,19 @@ def cb_add_item_to_cart(package: Dict[str, Any]) -> None:
     except Exception as e:
         st.error(f"Failed to add item: {e}")
 
-def cb_update_item_qty(item_index: int, widget_key: str) -> None:
-    if not (0 <= item_index < len(st.session_state["inv_items"])):
+def cb_update_item_qty(item_id: str, widget_key: str) -> None:
+    items = st.session_state["inv_items"]
+    # Find item by ID
+    found_idx = -1
+    for i, it in enumerate(items):
+        if str(it.get("__id")) == str(item_id):
+            found_idx = i
+            break
+            
+    if found_idx == -1:
         return
 
-    item = st.session_state["inv_items"][item_index]
+    item = items[found_idx]
 
     # Guard: bundle qty always 1
     if item.get("_bundle"):
@@ -436,21 +416,32 @@ def cb_update_item_qty(item_index: int, widget_key: str) -> None:
     item["Total"] = safe_float(item.get("Price", 0)) * new_qty
     invalidate_pdf()
 
-def cb_delete_item(item_index: int) -> None:
-    if not (0 <= item_index < len(st.session_state["inv_items"])):
+def cb_delete_item(item_id: str) -> None:
+    items = st.session_state["inv_items"]
+    found_idx = -1
+    for i, it in enumerate(items):
+        if str(it.get("__id")) == str(item_id):
+            found_idx = i
+            break
+            
+    if found_idx == -1:
         return
 
-    item = st.session_state["inv_items"][item_index]
+    item = items[found_idx]
     _cleanup_qty_keys_for_item(item)
     _cleanup_bundle_price_key_for_item(item)
-    st.session_state["inv_items"].pop(item_index)
+    items.pop(found_idx)
     invalidate_pdf()
 
-def cb_update_bundle_price(item_index: int, widget_key: str) -> None:
-    if not (0 <= item_index < len(st.session_state["inv_items"])):
-        return
-    item = st.session_state["inv_items"][item_index]
-    if not item.get("_bundle"):
+def cb_update_bundle_price(item_id: str, widget_key: str) -> None:
+    items = st.session_state["inv_items"]
+    item = None
+    for it in items:
+        if str(it.get("__id")) == str(item_id):
+            item = it
+            break
+            
+    if not item or not item.get("_bundle"):
         return
 
     v = max(0, safe_int(st.session_state.get(widget_key, 0), 0))
@@ -905,9 +896,6 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
         if not items:
             st.info("Cart is empty.")
         else:
-            sync_qty_widget_state(items)
-            sync_bundle_price_widget_state(items)
-
             for idx, item in enumerate(items):
                 item_id = item.get("__id", str(idx))
                 is_bundle = bool(item.get("_bundle"))
@@ -936,7 +924,7 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
                             key=bp_key,
                             label_visibility="collapsed",
                             on_change=cb_update_bundle_price,
-                            args=(idx, bp_key),
+                            args=(item_id, bp_key),
                         )
                     else:
                         st.markdown(
@@ -954,7 +942,7 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
                         label_visibility="collapsed",
                         disabled=is_bundle,  # bundle qty locked
                         on_change=cb_update_item_qty,
-                        args=(idx, qty_key),
+                        args=(item_id, qty_key),
                     )
 
                 with col3:
@@ -968,7 +956,7 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
                         "✕",
                         key=f"del_{item_id}",
                         on_click=cb_delete_item,
-                        args=(idx,),
+                        args=(item_id,),
                         use_container_width=True,
                     )
 
