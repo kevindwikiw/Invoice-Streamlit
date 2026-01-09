@@ -136,7 +136,12 @@ def _exec_logout(reason: str = None):
     """Unified atomic logout execution."""
     conf = _get_secrets()
     st.session_state["_force_logout"] = True
-    cookie_manager.delete(conf["token_name"], key=f"logout_{int(time.time())}")
+    try:
+        cookie_manager.delete(conf["token_name"], key=f"logout_{int(time.time())}")
+    except KeyError:
+        pass  # Cookie already gone, ignore
+    except Exception as e:
+        print(f"[AUTH] Logout warning: {e}")
     
     # Selective cleanup
     for k in ["logged_in", "username", "_boot_time", "_last_active_at"]:
