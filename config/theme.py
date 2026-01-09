@@ -285,5 +285,10 @@ CSS = f"""
   div[data-testid="stNumberInput"] input {{
     text-align: center;
   }}
+  
+  /* --- HIDE STREAMLIT BRANDING --- */
+  #MainMenu {visibility: hidden;}
+  footer {visibility: hidden;}
+  header {visibility: hidden;}
+  .viewerBadge_container__1QSob {display: none !important;}
 </style>
-"""
