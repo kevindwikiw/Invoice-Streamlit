@@ -292,3 +292,4 @@ CSS = f"""
   header {visibility: hidden;}
   .viewerBadge_container__1QSob {display: none !important;}
 </style>
+"""
