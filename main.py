@@ -14,7 +14,7 @@ st.set_page_config(
 
 # Imports after page_config
 from modules import auth, db
-from views import packages_view, invoice_view
+from views import packages_view, invoice_view, history_view
 
 # =========================================================
 # 2. INITIALIZATION ROUTINES
@@ -27,6 +27,10 @@ def init_application():
     if not st.session_state.get("_db_initialized", False):
         db.init_db()
         st.session_state["_db_initialized"] = True
+    
+    # Init dynamic nav key
+    if "nav_key" not in st.session_state:
+        st.session_state["nav_key"] = 0
 
 # =========================================================
 # 3. UI COMPONENTS
@@ -79,17 +83,39 @@ def render_sidebar() -> str:
             packages = db.load_packages()
             pkg_count = len(packages)
             db_empty = (pkg_count == 0)
+            
+            # Fetch Dashboard Stats
+            stats = db.get_dashboard_stats()
+            total_rev = stats.get("revenue", 0)
+            inv_count = stats.get("count", 0)
+            
         except Exception:
             pkg_count = 0
             db_empty = True
+            total_rev = 0
+            inv_count = 0
 
-        st.metric(label="Total Packages", value=str(pkg_count))
+        # Mini Dashboard
+        m1, m2 = st.columns(2)
+        m1.metric("Packages", str(pkg_count))
+        m2.metric("Invoices", str(inv_count))
+        
+        # Helper for format
+        def _fmt_rev(val):
+            if val >= 1_000_000_000:
+                return f"Rp{val/1_000_000_000:.1f}M"
+            elif val >= 1_000_000:
+                return f"Rp{val/1_000_000:.1f}Jt"
+            return f"Rp{val:,.0f}"
+            
+        st.metric("Total Revenue", _fmt_rev(total_rev), help="Total from all saved invoices")
         st.divider()
 
         # Navigation
         nav_options = ["📦 Package Database"]
         if not db_empty:
-            nav_options.append("🧾 Create Invoice")
+             nav_options.append("🧾 Create Invoice")
+             nav_options.append("📜 Invoice History")
         
         # State Persistence
         current_selection = st.session_state.get("menu_selection", nav_options[0])
@@ -100,7 +126,7 @@ def render_sidebar() -> str:
             "Main Menu", 
             options=nav_options, 
             index=nav_options.index(current_selection),
-            key="nav_radio",
+            key=f"nav_radio_{st.session_state['nav_key']}",
             label_visibility="collapsed"
         )
         st.session_state["menu_selection"] = selected
@@ -146,6 +172,9 @@ def main():
                  st.rerun()
         else:
             invoice_view.render_page()
+
+    elif selected_menu == "📜 Invoice History":
+        history_view.render_page()
 
 if __name__ == "__main__":
     try:
