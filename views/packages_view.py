@@ -1,6 +1,4 @@
 import streamlit as st
-# HAPUS IMPORT PANDAS
-# import pandas as pd 
 from modules import db
 from ui.components import page_header, section, danger_container
 from ui.formatters import rupiah
