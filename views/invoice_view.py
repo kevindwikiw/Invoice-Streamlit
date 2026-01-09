@@ -50,13 +50,33 @@ DEFAULT_TERMS = (
     "Termin pembayaran H+7 Pameran: Rp 500.000, H-7 prewedding: Rp 3.000.000, dan pelunasan H-7 wedding\n"
     "Maksimal pembayaran Invoice 1 minggu dari tanggal invoice\n"
     "Paket yang telah dipilih tidak bisa down grade\n"
-    "5Melakukan pembayaran berarti menyatakan setuju dengan detail invoice. Pembayaran yang telah dilakukan tidak bisa di refund"
+    "Melakukan pembayaran berarti menyatakan setuju dengan detail invoice. Pembayaran yang telah dilakukan tidak bisa di refund"
 )
 DEFAULT_BANK_INFO = {
     "bank_nm": "OCBC",
     "bank_ac": "693810505794",
     "bank_an": "FANI PUSPITA NINGRUM",
 }
+
+# --- DB Persistence Helper ---
+def load_db_settings() -> Dict[str, Any]:
+    return {
+        "title": db.get_config("inv_title_default", DEFAULT_INVOICE_TITLE),
+        "terms": db.get_config("inv_terms_default", DEFAULT_TERMS),
+        "bank_nm": db.get_config("bank_nm_default", DEFAULT_BANK_INFO["bank_nm"]),
+        "bank_ac": db.get_config("bank_ac_default", DEFAULT_BANK_INFO["bank_ac"]),
+        "bank_an": db.get_config("bank_an_default", DEFAULT_BANK_INFO["bank_an"]),
+    }
+
+# --- DB Persistence Helper ---
+def load_db_settings() -> Dict[str, Any]:
+    return {
+        "title": db.get_config("inv_title_default", DEFAULT_INVOICE_TITLE),
+        "terms": db.get_config("inv_terms_default", DEFAULT_TERMS),
+        "bank_nm": db.get_config("bank_nm_default", DEFAULT_BANK_INFO["bank_nm"]),
+        "bank_ac": db.get_config("bank_ac_default", DEFAULT_BANK_INFO["bank_ac"]),
+        "bank_an": db.get_config("bank_an_default", DEFAULT_BANK_INFO["bank_an"]),
+    }
 
 CATALOG_CACHE_TTL_SEC = 300  # 5 min, safe default
 
@@ -284,6 +304,9 @@ def load_packages_cached() -> List[Dict[str, Any]]:
 # ==============================================================================
 
 def initialize_session_state() -> None:
+    # Load custom defaults from DB
+    db_conf = load_db_settings()
+
     defaults: Dict[str, Any] = {
         # Cart Data
         "inv_items": [],
@@ -291,7 +314,7 @@ def initialize_session_state() -> None:
         "generated_pdf_bytes": None,
 
         # Invoice Metadata
-        "inv_title": DEFAULT_INVOICE_TITLE,
+        "inv_title": db_conf["title"],
         "inv_no": f"INV/{datetime.now().strftime('%m')}/2026",
         "inv_client_name": "",
         "inv_client_email": "",
@@ -305,10 +328,10 @@ def initialize_session_state() -> None:
         "pay_full": 0,
 
         # Configs
-        "inv_terms": DEFAULT_TERMS,
-        "bank_nm": DEFAULT_BANK_INFO["bank_nm"],
-        "bank_ac": DEFAULT_BANK_INFO["bank_ac"],
-        "bank_an": DEFAULT_BANK_INFO["bank_an"],
+        "inv_terms": db_conf["terms"],
+        "bank_nm": db_conf["bank_nm"],
+        "bank_ac": db_conf["bank_ac"],
+        "bank_an": db_conf["bank_an"],
 
         # UI Filters
         "cat_filter": "All",
@@ -710,7 +733,16 @@ def render_admin_panel(grand_total: float) -> None:
             b_col1.text_input("Bank Name", key="bank_nm", on_change=invalidate_pdf)
             b_col2.text_input("Account No", key="bank_ac", on_change=invalidate_pdf)
             b_col3.text_input("Account Holder", key="bank_an", on_change=invalidate_pdf)
+            
             st.text_area("Terms & Conditions", key="inv_terms", height=110, on_change=invalidate_pdf)
+            
+            # Save Config Button
+            if st.button("💾 Save Settings as Default", help="Save Bank Info & Terms as permanent defaults", use_container_width=True):
+                db.set_config("bank_nm_default", st.session_state["bank_nm"])
+                db.set_config("bank_ac_default", st.session_state["bank_ac"])
+                db.set_config("bank_an_default", st.session_state["bank_an"])
+                db.set_config("inv_terms_default", st.session_state["inv_terms"])
+                st.toast("Settings saved! Will persist on restart.", icon="✅")
 
 def _filter_and_sort_packages(packages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cat_filter = st.session_state.get("cat_filter", "All")
