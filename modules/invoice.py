@@ -575,8 +575,71 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     # =========================================================
     _draw_footer_contact(c, W)
 
+    # =========================================================
+    # 7. PAGE 2: PAYMENT PROOF (Flexible Height)
+    # =========================================================
+    proof_data = meta.get("payment_proof")
+    if proof_data:
+        c.showPage() # Flush Page 1
+        
+        # Helper to load image from base64 or bytes
+        try:
+            from PIL import Image
+            import base64
+            
+            img_stream = None
+            if isinstance(proof_data, str):
+                try:
+                    if "," in proof_data: proof_data = proof_data.split(",", 1)[1]
+                    img_bytes = base64.b64decode(proof_data)
+                    img_stream = BytesIO(img_bytes)
+                except: pass
+            elif isinstance(proof_data, (bytes, bytearray)):
+                img_stream = BytesIO(proof_data)
+            
+            if img_stream:
+                img = ImageReader(Image.open(img_stream))
+                iw, ih = img.getSize()
+                aspect = ih / float(iw)
+
+                # Fixed Width (A4 width - margins)
+                draw_w = W - 2*margin
+                
+                # Calculate needed height
+                draw_h = draw_w * aspect
+                
+                # Calculate needed Page Height
+                # If image is tall, extend page. If short, use at least A4.
+                header_h = top_bar_h
+                needed_H = header_h + draw_h + 2*margin
+                
+                final_H = max(H, needed_H)
+                
+                # Resize Page
+                c.setPageSize((W, final_H))
+                
+                # Draw Header (Fixed at top)
+                c.setFillColor(BLACK)
+                c.rect(0, final_H - header_h, W, header_h, fill=1, stroke=0)
+                c.setFillColor(WHITE)
+                c.setFont("Times-Bold", 18)
+                c.drawRightString(W - margin, final_H - 20 * mm, "PAYMENT PROOF")
+                
+                _try_draw_logo(c, margin + 2*mm, final_H - header_h + 2*mm, logo_block_w - 4*mm, header_h - 4*mm, "assets/logo.png")
+                
+                # Draw Image (below header)
+                # Bottom Y = Top Y - Image Height
+                img_y = final_H - header_h - margin - draw_h
+                c.drawImage(img, margin, img_y, width=draw_w, height=draw_h, mask="auto")
+                
+        except Exception as e:
+            # Fallback error on standard page
+            c.setPageSize(A4)
+            c.setFillColor(colors.red)
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(margin, H - 50*mm, f"Error displaying proof: {str(e)}")
+
     c.showPage()
     c.save()
     buf.seek(0)
     return buf
-
