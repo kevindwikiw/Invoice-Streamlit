@@ -290,6 +290,11 @@ CSS = f"""
   #MainMenu {{visibility: hidden;}}
   footer {{visibility: hidden;}}
   header {{visibility: hidden;}}
+  
+  /* Hide Element Specifics */
+  [data-testid="stToolbar"] {{visibility: hidden !important;}}
+  [data-testid="stDecoration"] {{visibility: hidden !important;}}
+  [data-testid="stFooter"] {{visibility: hidden !important;}}
   .viewerBadge_container__1QSob {{display: none !important;}}
 </style>
 """
