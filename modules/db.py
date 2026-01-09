@@ -3,7 +3,6 @@ import os
 import sqlite3
 import streamlit as st
 from typing import Optional, List, Dict, Any
-from dotenv import load_dotenv
 
 # Try to import psycopg2 for Postgres
 try:
@@ -13,8 +12,21 @@ try:
 except ImportError:
     HAS_PSYCOPG2 = False
 
-# Load .env locally
-load_dotenv()
+# Load .env locally (Manual implementation to save dependency)
+def _load_env_file():
+    try:
+        if os.path.exists(".env"):
+            with open(".env", "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, val = line.split("=", 1)
+                    os.environ.setdefault(key.strip(), val.strip())
+    except:
+        pass
+
+_load_env_file()
 
 # Priority:
 # 1. Streamlit Secrets (Deployment)
@@ -53,6 +65,8 @@ def init_db() -> None:
 
 # ... existing code ...
 
+# ... (previous code) ...
+
 def _init_sqlite():
     with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
         c = conn.cursor()
@@ -65,11 +79,23 @@ def _init_sqlite():
                 description TEXT
             )
         ''')
-        # New Config Table
+        # Config Table
         c.execute('''
             CREATE TABLE IF NOT EXISTS app_config (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            )
+        ''')
+        # Invoices History Table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS invoices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_no TEXT,
+                client_name TEXT,
+                date TEXT,
+                total_amount REAL,
+                invoice_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         conn.commit()
@@ -87,17 +113,153 @@ def _init_postgres():
                         description TEXT
                     );
                 ''')
-                # New Config Table
+                # Config Table
                 c.execute('''
                     CREATE TABLE IF NOT EXISTS app_config (
                         key TEXT PRIMARY KEY,
                         value TEXT
                     );
                 ''')
+                # Invoices History Table
+                c.execute('''
+                    CREATE TABLE IF NOT EXISTS invoices (
+                        id SERIAL PRIMARY KEY,
+                        invoice_no TEXT,
+                        client_name TEXT,
+                        date TEXT,
+                        total_amount REAL,
+                        invoice_data TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                ''')
             conn.commit()
             print("[DB] Postgres Schema initialized.")
     except Exception as e:
         print(f"[DB ERROR] Postgres Init failed: {e}")
+
+# ... (existing config functions) ...
+
+# ----------------------------------------------------
+# 5. INVOICE HISTORY OPERATIONS
+# ----------------------------------------------------
+def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+    """Saves an invoice snapshot to history."""
+    if USE_POSTGRES:
+        with get_pg_connection() as conn:
+            with conn.cursor() as c:
+                c.execute("""
+                    INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json))
+            conn.commit()
+    else:
+        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data)
+                VALUES (?, ?, ?, ?, ?)
+            """, (invoice_no, client_name, date_str, total_amount, invoice_data_json))
+            conn.commit()
+
+def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
+    """Fetches recent invoices list (metadata only)."""
+    # We fetch LENGTH(invoice_data) to guess if an image is attached (heuristically > 10KB)
+    query = "SELECT id, invoice_no, client_name, date, total_amount, created_at, LENGTH(invoice_data) as data_size FROM invoices ORDER BY id DESC LIMIT %s"
+    
+    if USE_POSTGRES:
+        try:
+            with get_pg_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query, (limit,))
+                    return [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            print(f"[DB ERROR] get_invoices failed: {e}")
+            return []
+    else:
+        try:
+            with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
+                conn.row_factory = sqlite3.Row
+                c = conn.cursor()
+                c.execute(query.replace("%s", "?"), (limit,))
+                return [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            print(f"[DB ERROR] get_invoices failed: {e}")
+            return []
+
+def get_invoice_details(invoice_id: int) -> Optional[Dict[str, Any]]:
+    """Fetches full invoice data (including JSON snapshot)."""
+    query = "SELECT * FROM invoices WHERE id = %s"
+    if USE_POSTGRES:
+        try:
+            with get_pg_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query, (invoice_id,))
+                    row = c.fetchone()
+                    return dict(row) if row else None
+        except Exception:
+            return None
+    else:
+        try:
+            with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
+                conn.row_factory = sqlite3.Row
+                c = conn.cursor()
+                c.execute(query.replace("%s", "?"), (invoice_id,))
+                row = c.fetchone()
+                return dict(row) if row else None
+        except Exception:
+            return None
+
+def delete_invoice(invoice_id: int) -> None:
+    if USE_POSTGRES:
+        with get_pg_connection() as conn:
+            with conn.cursor() as c:
+                c.execute('DELETE FROM invoices WHERE id = %s', (invoice_id,))
+            conn.commit()
+    else:
+        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
+            c = conn.cursor()
+            c.execute('DELETE FROM invoices WHERE id = ?', (invoice_id,))
+            conn.commit()
+
+def update_invoice(invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+    """Updates an existing invoice."""
+    if USE_POSTGRES:
+        with get_pg_connection() as conn:
+            with conn.cursor() as c:
+                c.execute("""
+                    UPDATE invoices 
+                    SET invoice_no=%s, client_name=%s, date=%s, total_amount=%s, invoice_data=%s
+                    WHERE id=%s
+                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, invoice_id))
+            conn.commit()
+    else:
+        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
+            c = conn.cursor()
+            c.execute("""
+                SET invoice_no=?, client_name=?, date=?, total_amount=?, invoice_data=?
+                WHERE id=?
+            """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, invoice_id))
+            conn.commit()
+
+def get_dashboard_stats() -> Dict[str, Any]:
+    """Returns quick dashboard stats: Total Revenue, Invoice Count."""
+    query = "SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue FROM invoices"
+    
+    try:
+        if USE_POSTGRES:
+            with get_pg_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query)
+                    return dict(c.fetchone())
+        else:
+            with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
+                conn.row_factory = sqlite3.Row
+                c = conn.cursor()
+                c.execute(query)
+                return dict(c.fetchone())
+    except Exception as e:
+        print(f"Stats Error: {e}")
+        return {"count": 0, "revenue": 0}
 
 # ... existing code ...
 
@@ -148,7 +310,7 @@ def set_config(key: str, value: str) -> None:
 # ----------------------------------------------------
 # 2. READ OPERATIONS (CACHED)
 # ----------------------------------------------------
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_packages() -> List[Dict[str, Any]]:
     if USE_POSTGRES:
         return _load_postgres()
