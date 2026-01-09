@@ -351,7 +351,7 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
             data.append([str(item_no), Paragraph(full_desc_html, style_desc), price_str, "1", total_str])
         item_no += 1
 
-    col_widths = [10 * mm, 95 * mm, 30 * mm, 12 * mm, 30 * mm]
+    col_widths = [10 * mm, 96 * mm, 31 * mm, 12 * mm, 31 * mm]
     
     t = Table(data, colWidths=col_widths, repeatRows=1)
     t.setStyle(TableStyle([
