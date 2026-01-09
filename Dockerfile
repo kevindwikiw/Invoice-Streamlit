@@ -1,5 +1,5 @@
 # 1. Gunakan Python 3.13 Slim
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 # 2. Set Environment Variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
