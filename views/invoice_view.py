@@ -11,10 +11,16 @@ from typing import Any, Dict, List, Tuple
 from modules import db
 from modules import invoice as invoice_mod
 from modules import gdrive
+from modules.utils import (
+    safe_float, safe_int, normalize_db_records, calculate_totals,
+    sanitize_text, desc_to_lines, normalize_desc_text, 
+    is_valid_email, make_safe_filename, image_to_base64
+)
 
 # --- UI Components ---
 from ui.components import page_header
 from ui.formatters import rupiah
+from views.styles import inject_styles, POS_COLUMN_RATIOS
 
 # --- Fallback Logic for Tooltips ---
 try:
@@ -37,7 +43,7 @@ except ImportError:
 # ==============================================================================
 
 # Recommended: keep Desc not too dominant, Qty compact, Total readable, Del not bengkeng
-POS_COLUMN_RATIOS = [2.4, 0.6, 2, 0.7]  # Description | Qty | Total | Del
+# POS_COLUMN_RATIOS moved to views.styles
 MIN_QTY = 1
 
 CASHBACK_STEP = 500_000
@@ -85,190 +91,21 @@ CATALOG_CACHE_TTL_SEC = 300  # 5 min, safe default
 # 2) STYLING (CSS)
 # ==============================================================================
 
-def _pos_grid_template(ratios: List[float]) -> str:
-    return " ".join([f"{r}fr" for r in ratios])
-
-def _get_custom_css() -> str:
-    """Returns CSS styles for the invoice view."""
-    grid = _pos_grid_template(POS_COLUMN_RATIOS)
-    return f"""
-    <style>
-    /* --- UTILITIES --- */
-    .hrow {{ display:flex; gap:10px; align-items:center; justify-content:space-between; }}
-    .muted {{ color:#6b7280; font-size:.85rem; }}
-    .pill {{ font-size:.72rem; font-weight:900; padding:2px 10px; border-radius:999px; display:inline-block; }}
-    .statusbar {{
-        display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px;
-        border-radius:12px; border:1px solid rgba(0,0,0,.06); background:#f9fafb;
-    }}
-    .status-title {{ font-weight:900; color:#111827; font-size:.85rem; letter-spacing:.01em; }}
-    .status-right {{ display:flex; align-items:center; gap:8px; }}
-
-    /* --- SECTION TITLES --- */
-    .blk-title {{
-        font-size:1.02rem; font-weight:900; color:#111827;
-        line-height:1.2; margin:0 0 10px 0;
-    }}
-    .blk-sub {{ font-size:.82rem; color:#6b7280; margin-top:-6px; margin-bottom:10px; }}
-
-    /* --- CATALOG CARD --- */
-    .card {{
-        background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:14px;
-        transition:.15s ease; position:relative; height:100%;
-        overflow: visible;
-    }}
-    .card:hover {{ border-color:#cbd5e1; box-shadow:0 10px 22px rgba(0,0,0,.07); transform:translateY(-2px); }}
-    .title {{ font-weight:900; font-size:.95rem; color:#111827; line-height:1.25; margin-top:6px; }}
-    .price {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight:900; color:#2563eb; margin-top:2px; }}
-    .desc {{
-        font-size:.82rem; color:#6b7280; margin-top:6px; line-height:1.45;
-        display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:36px;
-    }}
-    .tip {{
-        display:none; position:absolute; left:0; right:0; bottom:100%;
-        background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:12px;
-        box-shadow:0 14px 30px rgba(0,0,0,.12); z-index:30; margin-bottom:10px; font-size:.82rem;
-    }}
-    .card:hover .tip {{ display:block; }}
-
-    /* --- POS TABLE --- */
-    .pos-head {{
-        display:grid; grid-template-columns:{grid};
-        gap:10px; align-items:center; font-size:.72rem; font-weight:900; color:#9ca3af;
-        text-transform:uppercase; letter-spacing:.05em; padding:0 0 10px 0;
-        border-bottom:1px solid #eee; margin-bottom:8px;
-    }}
-    .row {{ border-bottom:1px solid #f3f4f6; padding:10px 0; }}
-    .it {{ font-weight:900; color:#111827; font-size:.92rem; line-height:1.25; }}
-    .meta {{ font-size:.78rem; color:#9ca3af; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
-    .tot {{ text-align:right; font-variant-numeric: tabular-nums; font-weight:950; color:#111827; font-size:1.02rem; }}
-
-    /* --- GRAND TOTAL BOX --- */
-    .grand {{
-        background:#f9fafb; border:1px solid rgba(0,0,0,.06); border-radius:14px;
-        padding:14px; text-align:right; margin-top:12px;
-    }}
-    .grand .lbl {{ font-size:.75rem; font-weight:900; color:#6b7280; text-transform:uppercase; letter-spacing:.05em; }}
-    .grand .val {{ font-size:1.65rem; font-weight:950; color:#111827; margin-top:2px; }}
-
-    /* --- WIDGET OVERRIDES --- */
-    div[data-testid="stNumberInput"] {{ min-width:0!important; width:100%!important; }}
-    div[data-testid="stNumberInput"] input {{ height:2.1rem!important; text-align:center; font-weight:800; padding:0 .25rem!important; }}
-    div[data-testid="stButton"] button {{ padding:.28rem .55rem; min-height:0; }}
-    </style>
-    """
-
-def inject_styles() -> None:
-    st.markdown(_get_custom_css(), unsafe_allow_html=True)
+# ==============================================================================
+# 2) STYLING (CSS) - Moved to views/styles.py
+# ==============================================================================
+# injected via inject_styles() call
 
 
 # ==============================================================================
 # 3) HELPERS (minimal, no extra imports)
 # ==============================================================================
 
-def safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return default
+def _image_to_base64(uploaded_file) -> str:
+    """Wrapper for backward compatibility or direct import."""
+    return image_to_base64(uploaded_file)
 
-def safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(float(value))
-    except (ValueError, TypeError):
-        return default
-
-def normalize_db_records(raw_data: Any) -> List[Dict[str, Any]]:
-    """Normalizes DB output into list[dict]. Supports DataFrame-like to_dict('records')."""
-    if raw_data is None:
-        return []
-    if hasattr(raw_data, "to_dict"):
-        try:
-            return raw_data.to_dict("records")
-        except Exception:
-            return []
-    if isinstance(raw_data, list):
-        return raw_data
-    return []
-
-def calculate_totals(items: List[Dict[str, Any]], cashback: float) -> Tuple[float, float]:
-    subtotal = sum(
-        safe_float(item.get("Price", 0)) * max(MIN_QTY, safe_int(item.get("Qty", 1), 1))
-        for item in items
-    )
-    grand_total = max(0.0, subtotal - max(0.0, cashback))
-    return subtotal, grand_total
-
-def sanitize_text(text: Any) -> str:
-    """Tiny HTML escape w/o imports (safe for unsafe_allow_html)."""
-    s = str(text or "")
-    s = s.replace("&", "&amp;")
-    s = s.replace("<", "&lt;").replace(">", "&gt;")
-    s = s.replace('"', "&quot;").replace("'", "&#x27;")
-    return s
-
-def desc_to_lines(desc_clean: str) -> List[str]:
-    """
-    Turn normalized description into clean bullet lines.
-    - split by newline
-    - strip common bullet chars
-    - drop empties
-    """
-    lines: List[str] = []
-    for raw in (desc_clean or "").split("\n"):
-        s = str(raw).strip()
-        if not s:
-            continue
-        s = s.lstrip("-•·").strip()
-        if s:
-            lines.append(s)
-    return lines
-
-def normalize_desc_text(raw: Any) -> str:
-    """
-    Convert any <br ...> or &lt;br ...&gt; variants into newlines.
-    No regex, no html import.
-    """
-    s = str(raw or "")
-
-    # handle escaped tags
-    s = s.replace("&lt;", "<").replace("&gt;", ">")
-
-    out = []
-    i = 0
-    n = len(s)
-    while i < n:
-        if s[i] == "<" and i + 2 < n and s[i:i+3].lower() == "<br":
-            j = i + 3
-            while j < n and s[j] != ">":
-                j += 1
-            if j < n and s[j] == ">":
-                out.append("\n")
-                i = j + 1
-                continue
-        out.append(s[i])
-        i += 1
-
-    s = "".join(out)
-    s = s.replace("\r\n", "\n").replace("\r", "\n")
-    return s.strip()
-
-def is_valid_email(email: str) -> bool:
-    """Minimal sanity check (no regex)."""
-    e = (email or "").strip()
-    if not e or " " in e or "@" not in e:
-        return False
-    local, domain = e.rsplit("@", 1)
-    if not local or not domain or "." not in domain:
-        return False
-    if domain.startswith(".") or domain.endswith(".") or ".." in e:
-        return False
-    return True
-
-def make_safe_filename(inv_no: str, prefix: str = "INV") -> str:
-    inv_no = (inv_no or prefix).strip()
-    safe_name = inv_no.replace("/", "_").replace("\\", "_").strip()
-    return safe_name or "invoice"
+# --- Removed extracted helpers ---
 
 def payment_integrity_status(
     grand_total: float,
@@ -346,6 +183,9 @@ def initialize_session_state() -> None:
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
+        
+    # Ensure editing ID exists
+    st.session_state.setdefault("editing_invoice_id", None)
 
 def invalidate_pdf() -> None:
     st.session_state["generated_pdf_bytes"] = None
@@ -507,6 +347,7 @@ def cb_reset_transaction() -> None:
     st.session_state["pay_term2"] = 0
     st.session_state["pay_term3"] = 0
     st.session_state["pay_full"] = 0
+    st.session_state["editing_invoice_id"] = None  # Clear edit mode
     cleanup_all_qty_keys()
     cleanup_all_bundle_price_keys()
     st.toast("Transaction cleared.", icon="🧹")
@@ -657,92 +498,175 @@ def cb_unmerge_bundle(bundle_id: str) -> None:
 # 6) UI RENDERERS
 # ==============================================================================
 
-def render_admin_panel(grand_total: float) -> None:
-    with st.container(border=True):
-        st.markdown("<div class='blk-title'>🧩 Admin Details</div>", unsafe_allow_html=True)
-        st.markdown("<div class='blk-sub'>Invoice metadata + payment schedule.</div>", unsafe_allow_html=True)
-
-        col1, col2, col3 = st.columns([1, 1, 1])
-        col1.text_input("Event / Title", key="inv_title", on_change=invalidate_pdf)
-        col2.text_input("Invoice No", key="inv_no", on_change=invalidate_pdf)
-        col3.date_input("Wedding Date", key="inv_wedding_date", on_change=invalidate_pdf)
-
-        col4, col5, col6 = st.columns([1, 1, 1])
-        col4.text_input("Client Name", key="inv_client_name", placeholder="CPW & CPP", on_change=invalidate_pdf)
-        col5.text_input("Email", key="inv_client_email", placeholder="client@email.com", on_change=invalidate_pdf)
-        col6.text_input("Venue", key="inv_venue", placeholder="Hotel/Gedung", on_change=invalidate_pdf)
-
-        st.divider()
-        st.markdown("<div class='blk-title'>💸 Payment Schedule</div>", unsafe_allow_html=True)
-
-        dp1 = safe_int(st.session_state.get("pay_dp1", 0), 0)
-        t2 = safe_int(st.session_state.get("pay_term2", 0), 0)
-        t3 = safe_int(st.session_state.get("pay_term3", 0), 0)
-        full = safe_int(st.session_state.get("pay_full", 0), 0)
-
-        status, msg, _ = payment_integrity_status(grand_total, dp1, t2, t3, full)
-
-        if status == "BALANCED":
-            pill = "<span class='pill' style='background:#e8f5e9;color:#15803d;'>BALANCED</span>"
-        elif status == "UNALLOCATED":
-            pill = "<span class='pill' style='background:#fff7ed;color:#c2410c;'>UNALLOCATED</span>"
-        elif status == "OVER":
-            pill = "<span class='pill' style='background:#fee2e2;color:#b91c1c;'>OVER</span>"
-        else:
-            pill = "<span class='pill' style='background:#eef2ff;color:#3730a3;'>INFO</span>"
-
-        st.markdown(
-            f"""
-            <div class="statusbar">
-              <div>
-                <div class="status-title">Payment Integrity</div>
-                <div class="muted">{sanitize_text(msg)}</div>
-              </div>
-              <div class="status-right">{pill}</div>
+def render_event_metadata() -> None:
+    # --- Card 1: Event & Client ---
+    st.markdown(
+        """
+        <div class="iso-card">
+            <div class="iso-row" style="margin-bottom:12px;">
+                <div class="blk-title" style="margin:0;">📝 Event Details</div>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        """, 
+        unsafe_allow_html=True
+    )
+    
+    # Event Row
+    c1, c2, c3 = st.columns([1, 0.8, 1])
+    c1.text_input("Invoice No", key="inv_no", on_change=invalidate_pdf)
+    c2.date_input("Wedding Date", key="inv_wedding_date", on_change=invalidate_pdf)
+    c3.text_input("Venue", key="inv_venue", placeholder="Hotel/Gedung", on_change=invalidate_pdf)
+    
+    st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
+    
+    # Client Row
+    c4, c5, c6 = st.columns([1.2, 1, 1])
+    c4.text_input("Event / Title", key="inv_title", on_change=invalidate_pdf)
+    c5.text_input("Client Name", key="inv_client_name", placeholder="CPW & CPP", on_change=invalidate_pdf)
+    c6.text_input("Email", key="inv_client_email", placeholder="client@email.com", on_change=invalidate_pdf)
+    
+    st.markdown("</div>", unsafe_allow_html=True) # End Card 1
 
-        st.write("")
+    # Banking Config (Collapsible) - Moved here to reduce Right Col height
+    with st.expander("🏦 Bank & Terms Config"):
+        b_col1, b_col2, b_col3 = st.columns(3)
+        b_col1.text_input("Bank Name", key="bank_nm", on_change=invalidate_pdf)
+        b_col2.text_input("Account No", key="bank_ac", on_change=invalidate_pdf)
+        b_col3.text_input("Account Holder", key="bank_an", on_change=invalidate_pdf)
+        
+        st.text_area("Terms & Conditions", key="inv_terms", height=100, on_change=invalidate_pdf)
+        
+        if st.button("💾 Save Settings", help="Save as defaults", use_container_width=True):
+            db.set_config("bank_nm_default", st.session_state["bank_nm"])
+            db.set_config("bank_ac_default", st.session_state["bank_ac"])
+            db.set_config("bank_an_default", st.session_state["bank_an"])
+            db.set_config("inv_terms_default", st.session_state["inv_terms"])
+            st.toast("Settings saved!", icon="✅")
 
-        row1, row2, row3, row4 = st.columns(4)
-        row1.number_input("DP 1", step=PAYMENT_STEP, key="pay_dp1", on_change=invalidate_pdf)
-        row2.number_input("Term 2", step=PAYMENT_STEP, key="pay_term2", on_change=invalidate_pdf)
-        row3.number_input("Term 3", step=PAYMENT_STEP, key="pay_term3", on_change=invalidate_pdf)
-        row4.number_input("Pelunasan", step=PAYMENT_STEP, key="pay_full", on_change=invalidate_pdf)
 
-        btn_col1, btn_col2 = st.columns(2)
-        btn_col1.button(
-            "Auto Split 4",
-            on_click=cb_auto_split_payments,
-            args=(grand_total,),
-            disabled=(grand_total <= 0),
-            use_container_width=True,
-        )
-        btn_col2.button(
-            "Fill Remaining → Pelunasan",
-            on_click=cb_fill_remaining_payment,
-            args=(grand_total,),
-            disabled=(grand_total <= 0),
-            use_container_width=True,
-        )
+def render_payment_section(grand_total: float) -> None:
+    # --- Card 2: Payment Schedule ---
+    st.markdown(
+        """
+        <div class="iso-card">
+            <div class="iso-row" style="margin-bottom:12px;">
+                <div class="blk-title" style="margin:0;">💸 Payment Schedule</div>
+            </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-        with st.expander("🏦 Bank & Terms Config", expanded=False):
-            b_col1, b_col2, b_col3 = st.columns(3)
-            b_col1.text_input("Bank Name", key="bank_nm", on_change=invalidate_pdf)
-            b_col2.text_input("Account No", key="bank_ac", on_change=invalidate_pdf)
-            b_col3.text_input("Account Holder", key="bank_an", on_change=invalidate_pdf)
-            
-            st.text_area("Terms & Conditions", key="inv_terms", height=110, on_change=invalidate_pdf)
-            
-            # Save Config Button
-            if st.button("💾 Save Settings as Default", help="Save Bank Info & Terms as permanent defaults", use_container_width=True):
-                db.set_config("bank_nm_default", st.session_state["bank_nm"])
-                db.set_config("bank_ac_default", st.session_state["bank_ac"])
-                db.set_config("bank_an_default", st.session_state["bank_an"])
-                db.set_config("inv_terms_default", st.session_state["inv_terms"])
-                st.toast("Settings saved! Will persist on restart.", icon="✅")
+    dp1 = safe_int(st.session_state.get("pay_dp1", 0), 0)
+    t2 = safe_int(st.session_state.get("pay_term2", 0), 0)
+    t3 = safe_int(st.session_state.get("pay_term3", 0), 0)
+    full = safe_int(st.session_state.get("pay_full", 0), 0)
+
+    status, msg, _ = payment_integrity_status(grand_total, dp1, t2, t3, full)
+
+    if status == "BALANCED":
+        badge_cls = "badg-green"
+    elif status == "UNALLOCATED":
+        badge_cls = "badg-orange" 
+    elif status == "OVER":
+        badge_cls = "badg-red"
+    else:
+        badge_cls = "badg-blue"
+
+    # Status Bar
+    st.markdown(
+        f"""
+        <div class="statusbar" style="margin-bottom:16px;">
+          <div>
+            <div class="status-title">Payment Status</div>
+            <div class="muted">{sanitize_text(msg)}</div>
+          </div>
+          <div class="status-right">
+            <span class="iso-badg {badge_cls}">{status}</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Input Grid
+    row1, row2, row3, row4 = st.columns(4)
+    row1.number_input("DP 1", step=PAYMENT_STEP, key="pay_dp1", on_change=invalidate_pdf)
+    row2.number_input("Term 2", step=PAYMENT_STEP, key="pay_term2", on_change=invalidate_pdf)
+    row3.number_input("Term 3", step=PAYMENT_STEP, key="pay_term3", on_change=invalidate_pdf)
+    row4.number_input("Pelunasan", step=PAYMENT_STEP, key="pay_full", on_change=invalidate_pdf)
+
+    # Buttons
+    st.write("")
+    btn_col1, btn_col2 = st.columns(2)
+    btn_col1.button(
+        "Auto Split 4",
+        on_click=cb_auto_split_payments,
+        args=(grand_total,),
+        disabled=(grand_total <= 0),
+        use_container_width=True,
+    )
+    btn_col2.button(
+        "Fill Remaining → Pelunasan",
+        on_click=cb_fill_remaining_payment,
+        args=(grand_total,),
+        disabled=(grand_total <= 0),
+        use_container_width=True,
+    )
+
+    st.markdown("</div>", unsafe_allow_html=True) # End Card 2
+
+    # --- Card 3: Payment Proof ---
+    st.markdown(
+        """
+        <div class="iso-card">
+            <div class="iso-row">
+                <div class="blk-title" style="margin:0;">📸 Payment Proof</div>
+            </div>
+            <div style="margin-top:12px;"></div>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    pp_col1, pp_col2 = st.columns([3, 1])
+    with pp_col1:
+        pp_file = st.file_uploader("Upload Image (JPG/PNG)", type=["jpg", "png", "jpeg"], key="pp_uploader", label_visibility="collapsed")
+    
+    if pp_file:
+        st.session_state["pp_cached"] = _image_to_base64(pp_file)
+        
+    with pp_col2:
+        if st.session_state.get("pp_cached"):
+            st.success("Ready!")
+            if st.button("❌ Remove", key="rm_proof", use_container_width=True):
+                del st.session_state["pp_cached"]
+                st.rerun()
+    
+    st.markdown("</div>", unsafe_allow_html=True) # End Card 3
+
+    # --- PROCESS ACTIONS ---
+    st.write("")
+    act_col1, act_col2 = st.columns([1, 2], vertical_alignment="bottom")
+    act_col1.button("Reset All", on_click=cb_reset_transaction, use_container_width=True)
+
+    # Re-calculate checks for button state
+    # We need subtotal/grand_total but they are passed to parent. 
+    # Wait, simple check: items > 0 and grand_total passed in arg > 0
+    items = st.session_state.get("inv_items", [])
+    is_valid_order = (len(items) > 0) and (grand_total > 0)
+    already_ready = bool(st.session_state.get("generated_pdf_bytes"))
+    
+    btn_label = "✅ PDF Ready" if already_ready else "🚀 Process Invoice & PDF"
+    
+    # We need subtotal for generate_pdf_wrapper. 
+    # Use utils/calculate_totals helper to re-derive subtotal from items.
+    # OR, we should pass subtotal to this function. 
+    # For now, re-calculating is safe and cheap.
+    current_sub, _ = calculate_totals(items, safe_float(st.session_state.get("inv_cashback", 0)))
+
+    if act_col2.button(btn_label, type="primary", use_container_width=True, disabled=not is_valid_order):
+        if already_ready:
+            st.toast("PDF already generated.", icon="✅")
+        else:
+            generate_pdf_wrapper(current_sub, grand_total)
 
 def _filter_and_sort_packages(packages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cat_filter = st.session_state.get("cat_filter", "All")
@@ -765,84 +689,99 @@ def _filter_and_sort_packages(packages: List[Dict[str, Any]]) -> List[Dict[str, 
     return filtered
 
 def render_catalog_section(packages: List[Dict[str, Any]]) -> None:
-    with st.container(border=True):
-        st.markdown("<div class='blk-title'>📦 Catalog</div>", unsafe_allow_html=True)
+    # --- Catalog Card ---
+    st.markdown(
+        """
+        <div class="iso-card">
+            <div class="iso-row" style="margin-bottom:12px;">
+                <div class="blk-title" style="margin:0;">📦 Catalog</div>
+            </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-        filter_col1, filter_col2, filter_col3 = st.columns([1, 1, 1.4])
-        filter_col1.selectbox("Category", ["All"] + list(CATEGORIES), key="cat_filter", label_visibility="collapsed")
-        filter_col2.selectbox("Sort", ["Price: High", "Price: Low"], key="sort_filter", index=0, label_visibility="collapsed")
-        filter_col3.text_input("Search", placeholder="Search items...", key="search_filter", label_visibility="collapsed")
+    filter_col1, filter_col2, filter_col3 = st.columns([1, 1, 1.4])
+    filter_col1.selectbox("Category", ["All"] + list(CATEGORIES), key="cat_filter", label_visibility="collapsed")
+    filter_col2.selectbox("Sort", ["Price: High", "Price: Low"], key="sort_filter", index=0, label_visibility="collapsed")
+    filter_col3.text_input("Search", placeholder="Search items...", key="search_filter", label_visibility="collapsed")
 
-        filtered_data = _filter_and_sort_packages(packages)
-        if not filtered_data:
-            st.info("No items found.")
-            return
+    filtered_data = _filter_and_sort_packages(packages)
+    if not filtered_data:
+        st.info("No items found.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
 
-        cols = st.columns(3, gap="small")
-        cart_ids = {str(item.get("_row_id")) for item in st.session_state["inv_items"]}
+    cols = st.columns(3, gap="small")
+    cart_ids = {str(item.get("_row_id")) for item in st.session_state["inv_items"]}
 
-        for idx, row in enumerate(filtered_data):
-            with cols[idx % 3]:
-                is_main = row.get("category") == (CATEGORIES[0] if CATEGORIES else "Utama")
-                bg_color, txt_color = ("#e8f5e9", "#15803d") if is_main else ("#fff7ed", "#c2410c")
-                badge_text = "MAIN" if is_main else "ADD-ON"
+    for idx, row in enumerate(filtered_data):
+        with cols[idx % 3]:
+            is_main = row.get("category") == (CATEGORIES[0] if CATEGORIES else "Utama")
+            bg_color, txt_color = ("#e8f5e9", "#15803d") if is_main else ("#fff7ed", "#c2410c")
+            badge_text = "MAIN" if is_main else "ADD-ON"
 
-                name = row.get("name", "Unnamed")
-                price = safe_float(row.get("price"))
+            name = row.get("name", "Unnamed")
+            price = safe_float(row.get("price"))
 
-                desc_clean = normalize_desc_text(row.get("description", ""))
-                lines = desc_to_lines(desc_clean)
+            desc_clean = normalize_desc_text(row.get("description", ""))
+            lines = desc_to_lines(desc_clean)
 
-                if lines:
-                    preview_text = "\n".join(lines[:2])
-                else:
-                    preview, _, _ = _desc_meta(desc_clean, max_lines=2)
-                    preview_text = str(preview or "No details.").strip()
+            if lines:
+                preview_text = "\n".join(lines[:2])
+            else:
+                preview, _, _ = _desc_meta(desc_clean, max_lines=2)
+                preview_text = str(preview or "No details.").strip()
 
-                preview_html = sanitize_text(preview_text).replace("\n", "<br/>")
+            preview_html = sanitize_text(preview_text).replace("\n", "<br/>")
 
-                tooltip_html = ""
-                if lines:
-                    full_desc = "".join([f"<div>• {sanitize_text(l)}</div>" for l in lines])
-                    tooltip_html = (
-                        "<div class='tip'><b>📋 Details</b>"
-                        f"<div style='margin-top:6px;'>{full_desc}</div></div>"
-                    )
-
-                st.markdown(
-                    f"""
-                    <div class="card">
-                      <span class="pill" style="background:{bg_color}; color:{txt_color};">{badge_text}</span>
-                      <div class="title">{sanitize_text(name)}</div>
-                      <div class="price">{sanitize_text(rupiah(price))}</div>
-                      <div class="desc">{preview_html}</div>
-                      {tooltip_html}
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
+            tooltip_html = ""
+            if lines:
+                full_desc = "".join([f"<div>• {sanitize_text(l)}</div>" for l in lines])
+                tooltip_html = (
+                    "<div class='tip'><b>📋 Details</b>"
+                    f"<div style='margin-top:6px;'>{full_desc}</div></div>"
                 )
 
-                row_id = str(row.get("id", name))
-                is_added = row_id in cart_ids
-                st.button(
-                    "✓ Added" if is_added else "＋ Add",
-                    key=f"add_{row_id}_{idx}",
-                    disabled=is_added,
-                    use_container_width=True,
-                    on_click=cb_add_item_to_cart,
-                    args=(row,),
-                )
+            st.markdown(
+                f"""
+                <div class="card" style="border:1px solid #f3f4f6;">
+                  <span class="pill" style="background:{bg_color}; color:{txt_color};">{badge_text}</span>
+                  <div class="title">{sanitize_text(name)}</div>
+                  <div class="price">{sanitize_text(rupiah(price))}</div>
+                  <div class="desc">{preview_html}</div>
+                  {tooltip_html}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            row_id = str(row.get("id", name))
+            is_added = row_id in cart_ids
+            st.button(
+                "✓ Added" if is_added else "＋ Add",
+                key=f"add_{row_id}_{idx}",
+                disabled=is_added,
+                use_container_width=True,
+                on_click=cb_add_item_to_cart,
+                args=(row,),
+            )
+            
+    st.markdown("</div>", unsafe_allow_html=True)
 
 def render_bundling_panel() -> None:
     # show bundling controls only if at least 2 non-bundle items exist
     non_bundle = _cart_non_bundle_items()
     bundles = _cart_bundle_items()
 
-    with st.expander("✨ Bundling (Merge Items)", expanded=False):
-        st.caption("Pilih 2+ item di cart → merge jadi 1 bundling. Harga bisa sum otomatis atau custom.")
+    if len(non_bundle) < 2 and not bundles:
+        return
+
+    # Collapsible Action Bar Style
+    with st.expander("✨ Bundling Tools (Merge Items)", expanded=False):
+        st.caption("Select items to merge into a single bundle line.")
 
         if len(non_bundle) < 2:
-            st.info("Add at least 2 items to enable bundling.")
+            st.info("Add at least 2 items to cart to enable bundling.")
         else:
             def _fmt_item_id(item_id: str) -> str:
                 # display label for multiselect
@@ -858,7 +797,7 @@ def render_bundling_panel() -> None:
 
             options = [str(it.get("__id")) for it in non_bundle if str(it.get("__id"))]
             st.multiselect(
-                "Select items",
+                "Select items to merge",
                 options=options,
                 key="bundle_sel",
                 format_func=_fmt_item_id,
@@ -866,26 +805,26 @@ def render_bundling_panel() -> None:
 
             colA, colB = st.columns([1.3, 1])
             colA.text_input(
-                "Bundle title (optional)",
+                "Bundle Title Override",
                 key="bundle_title",
-                placeholder="BUNDLING FULL DAY + TRD Ceremonial (at Exhibition)",
+                placeholder="e.g. Full Package Bundle",
             )
             colB.selectbox(
-                "Price mode",
+                "Price Logic",
                 ["Sum of selected", "Custom"],
                 key="bundle_price_mode",
             )
 
             if st.session_state.get("bundle_price_mode") == "Custom":
                 st.number_input(
-                    "Custom price",
+                    "Custom Price",
                     min_value=0,
                     step=BUNDLE_PRICE_STEP,
                     key="bundle_custom_price",
                 )
 
             st.button(
-                "✨ Merge Selected",
+                "✨ Create Bundle",
                 type="primary",
                 use_container_width=True,
                 on_click=cb_merge_selected_from_ui,
@@ -893,13 +832,13 @@ def render_bundling_panel() -> None:
 
         if bundles:
             st.divider()
-            st.caption("Existing bundle(s)")
+            st.caption("Active Bundles")
             for b in bundles:
                 bid = str(b.get("__id"))
                 nm = str(b.get("Description", "Bundling"))
                 st.write(f"• **{nm}** — {rupiah(safe_float(b.get('Price', 0)))}")
                 st.button(
-                    "↩️ Unmerge",
+                    "↩️ Unmerge / Split",
                     key=f"unmerge_{bid}",
                     use_container_width=True,
                     on_click=cb_unmerge_bundle,
@@ -907,129 +846,109 @@ def render_bundling_panel() -> None:
                 )
 
 def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> None:
-    with st.container(border=True):
-        st.markdown("<div class='blk-title'>🧾 POS</div>", unsafe_allow_html=True)
+    # --- Bill Items Card ---
+    st.markdown(
+        """
+        <div class="iso-card">
+            <div class="iso-row" style="margin-bottom:12px;">
+                <div class="blk-title" style="margin:0;">🛒 Bill Items</div>
+            </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-        # Bundling panel
-        render_bundling_panel()
+    # Bundling panel calls
+    render_bundling_panel()
 
-        st.markdown(
-            "<div class='pos-head'>"
-            "<div>Description</div>"
-            "<div style='text-align:center;'>Qty</div>"
-            "<div style='text-align:right;'>Total</div>"
-            "<div></div>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        "<div class='pos-head'>"
+        "<div>Description</div>"
+        "<div style='text-align:center;'>Qty</div>"
+        "<div style='text-align:right;'>Total</div>"
+        "<div></div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
-        items: List[Dict[str, Any]] = st.session_state["inv_items"]
+    items: List[Dict[str, Any]] = st.session_state["inv_items"]
 
-        if not items:
-            st.info("Cart is empty.")
-        else:
-            for idx, item in enumerate(items):
-                item_id = item.get("__id", str(idx))
-                is_bundle = bool(item.get("_bundle"))
+    if not items:
+        st.info("Cart is empty.")
+    else:
+        for idx, item in enumerate(items):
+            item_id = item.get("__id", str(idx))
+            is_bundle = bool(item.get("_bundle"))
 
-                st.markdown("<div class='row'>", unsafe_allow_html=True)
-                col1, col2, col3, col4 = st.columns(POS_COLUMN_RATIOS, gap="small", vertical_alignment="center")
+            st.markdown("<div class='row'>", unsafe_allow_html=True)
+            col1, col2, col3, col4 = st.columns(POS_COLUMN_RATIOS, gap="small", vertical_alignment="center")
 
-                with col1:
-                    st.markdown(
-                        f"<div class='it'>{sanitize_text(item.get('Description', ''))}</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                    # show base meta
-                    if is_bundle:
-                        st.markdown(
-                            f"<div class='meta'>BUNDLE • Price editable</div>",
-                            unsafe_allow_html=True,
-                        )
-                        # bundle price editor (compact)
-                        bp_key = f"bundle_price_{item_id}"
-                        st.number_input(
-                            "Bundle Price",
-                            min_value=0,
-                            step=BUNDLE_PRICE_STEP,
-                            key=bp_key,
-                            label_visibility="collapsed",
-                            on_change=cb_update_bundle_price,
-                            args=(item_id, bp_key),
-                        )
-                    else:
-                        st.markdown(
-                            f"<div class='meta'>@ {sanitize_text(rupiah(safe_float(item.get('Price'))))}</div>",
-                            unsafe_allow_html=True,
+            with col1:
+                st.markdown(
+                    f"<div class='it'>{sanitize_text(item.get('Description', ''))}</div>",
+                    unsafe_allow_html=True,
+                )
+                if is_bundle:
+                    st.markdown("<div class='iso-badg badg-blue' style='margin-top:4px;'>BUNDLE</div>", unsafe_allow_html=True)
+                    # Optional: Show bundle price input if mode is custom? 
+                    # For simplicity, we stick to standard display unless user asks.
+                    # If we want to allow editing, we check is_bundle logic.
+                    if st.session_state.get("bundle_price_mode") == "Custom":
+                         bp_key = f"bundle_price_{item_id}"
+                         st.number_input(
+                            "Price", min_value=0, step=BUNDLE_PRICE_STEP, key=bp_key, 
+                            label_visibility="collapsed", on_change=cb_update_bundle_price, args=(item_id, bp_key)
                         )
 
-                with col2:
+            with col2:
+                if is_bundle:
+                    st.markdown("<div style='text-align:center;font-weight:bold;color:#6b7280;'>1</div>", unsafe_allow_html=True)
+                else:
                     qty_key = f"qty_{item_id}"
                     st.number_input(
                         "Qty",
-                        min_value=MIN_QTY,
+                        min_value=1,
                         step=1,
                         key=qty_key,
                         label_visibility="collapsed",
-                        disabled=is_bundle,  # bundle qty locked
                         on_change=cb_update_item_qty,
                         args=(item_id, qty_key),
                     )
 
-                with col3:
-                    st.markdown(
-                        f"<div class='tot'>{sanitize_text(rupiah(safe_float(item.get('Total'))))}</div>",
-                        unsafe_allow_html=True,
-                    )
+            with col3:
+                st.markdown(f"<div class='tot'>{rupiah(safe_float(item.get('Total', 0)))}</div>", unsafe_allow_html=True)
 
-                with col4:
-                    st.button(
-                        "✕",
-                        key=f"del_{item_id}",
-                        on_click=cb_delete_item,
-                        args=(item_id,),
-                        use_container_width=True,
-                    )
+            with col4:
+                st.button(
+                    "✕",
+                    key=f"del_{item_id}",
+                    on_click=cb_delete_item,
+                    args=(item_id,),
+                    type="secondary",
+                    use_container_width=True,
+                )
 
-                st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        st.divider()
-
-        # Cashback: ONLY input (no +/- buttons)
-        st.markdown("<div class='muted'><b>Discount / Cashback</b></div>", unsafe_allow_html=True)
-        st.number_input(
-            "Cashback",
-            min_value=0,
-            step=CASHBACK_STEP,
-            key="inv_cashback",
-            on_change=invalidate_pdf,
-        )
-
+    # --- Totals ---
+    st.markdown("<div style='margin-top:24px; border-top:1px dashed #e5e7eb; padding-top:16px;'></div>", unsafe_allow_html=True)
+    
+    t_c1, t_c2 = st.columns([1.5, 1])
+    with t_c1:
+        st.markdown("<div class='muted' style='margin-bottom:4px;'>Discount / Cashback</div>", unsafe_allow_html=True)
+        st.number_input("Cashback", step=CASHBACK_STEP, key="inv_cashback", on_change=invalidate_pdf, label_visibility="collapsed")
+    
+    with t_c2:
         st.markdown(
             f"""
-            <div class="grand">
+            <div class="grand" style="margin-top:0;">
               <div class="lbl">Grand Total</div>
-              <div class="val">{sanitize_text(rupiah(grand_total))}</div>
+              <div class="val">{rupiah(grand_total)}</div>
             </div>
             """,
-            unsafe_allow_html=True,
+            unsafe_allow_html=True
         )
-
-        st.write("")
-
-        act_col1, act_col2 = st.columns([1, 2], vertical_alignment="bottom")
-        act_col1.button("Reset", on_click=cb_reset_transaction, use_container_width=True)
-
-        is_valid_order = (len(items) > 0) and (grand_total > 0)
-        already_ready = bool(st.session_state.get("generated_pdf_bytes"))
-        btn_label = "✅ PDF Ready" if already_ready else "🚀 Process PDF"
-
-        if act_col2.button(btn_label, type="primary", use_container_width=True, disabled=not is_valid_order):
-            if already_ready:
-                st.toast("PDF already generated (no changes detected).", icon="✅")
-            else:
-                generate_pdf_wrapper(subtotal, grand_total)
+        
+    st.markdown("</div>", unsafe_allow_html=True) # End Card
 
 
 # ==============================================================================
@@ -1055,6 +974,7 @@ def generate_pdf_wrapper(subtotal: float, grand_total: float) -> None:
             "bank_name": st.session_state.get("bank_nm", ""),
             "bank_acc": st.session_state.get("bank_ac", ""),
             "bank_holder": st.session_state.get("bank_an", ""),
+            "payment_proof": st.session_state.get("pp_cached", "")
         }
 
         with st.spinner("Generating PDF..."):
@@ -1105,24 +1025,100 @@ def render_download_section() -> None:
             use_container_width=True,
         )
 
-        if col2.button("☁️ Share Email", type="primary", use_container_width=True):
-            if not is_valid_email(email_recipient):
-                st.error("Please enter a valid email address.")
-                return
+        # Shared Email (Maintenance Mode)
+        col2.button(
+            "☁️ Share (Maintenance)", 
+            disabled=True, 
+            use_container_width=True, 
+            help="Fitur ini sedang dalam pemeliharaan (Maintenance up to date nanti)."
+        )
+        
+        # if col2.button("☁️ Share Email", type="primary", use_container_width=True):
+        #    # ... existing logic masked out ...
 
-            try:
-                with st.spinner("Uploading to Google Drive & sharing..."):
-                    pdf_stream = io.BytesIO(pdf_bytes)
-                    success, link, msg = gdrive.upload_and_share(pdf_stream, file_name, email_recipient)
+        # Save to History
+        edit_id = st.session_state.get("editing_invoice_id")
+        btn_label = f"💾 Update History (#{edit_id})" if edit_id else "💾 Save to History"
+        
+        if st.button(btn_label, use_container_width=True):
+             _handle_save_history(inv_no, email_recipient, pdf_bytes)
 
-                if success:
-                    st.success("Sent!")
-                    if link:
-                        st.link_button("Open Drive", link)
-                else:
-                    st.error(msg or "Upload failed.")
-            except Exception as e:
-                st.error(f"System Error: {e}")
+def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> None:
+    try:
+        import json
+        
+        # 1. Gather Data
+        meta = {
+            "inv_no": st.session_state.get("inv_no", ""),
+            "title": st.session_state.get("inv_title", ""),
+            "date": datetime.now().strftime("%d %B %Y"),
+            "client_name": st.session_state.get("inv_client_name", ""),
+            "client_email": client_email,
+            "wedding_date": (st.session_state.get("inv_wedding_date") or date.today()).strftime("%d %B %Y"),
+            "venue": st.session_state.get("inv_venue", ""),
+            "subtotal": 0,
+            "cashback": safe_float(st.session_state.get("inv_cashback", 0)),
+            "pay_dp1": safe_int(st.session_state.get("pay_dp1", 0)),
+            "pay_term2": safe_int(st.session_state.get("pay_term2", 0)),
+            "pay_term3": safe_int(st.session_state.get("pay_term3", 0)),
+            "pay_full": safe_int(st.session_state.get("pay_full", 0)),
+            "terms": st.session_state.get("inv_terms", ""),
+            "bank_name": st.session_state.get("bank_nm", ""),
+            "bank_acc": st.session_state.get("bank_ac", ""),
+            "bank_holder": st.session_state.get("bank_an", ""),
+            "payment_proof": st.session_state.get("pp_cached", "")
+        }
+        
+        # Recalc Totals for DB
+        items = st.session_state["inv_items"]
+        sub, grand = calculate_totals(items, meta["cashback"])
+        meta["subtotal"] = sub
+        
+        payload = {
+            "meta": meta,
+            "items": items,
+            "grand_total": grand
+        }
+        
+        # 2. Save or Update
+        edit_id = st.session_state.get("editing_invoice_id")
+        
+        if edit_id:
+            db.update_invoice(
+                edit_id,
+                inv_no, 
+                meta["client_name"], 
+                date.today().strftime("%Y-%m-%d"), 
+                grand, 
+                json.dumps(payload)
+            )
+            st.toast("Updated! Redirecting to History...", icon="✅")
+            st.session_state["editing_invoice_id"] = None
+            
+            # Redirect to History View
+            st.session_state["menu_selection"] = "📜 Invoice History"
+            if "nav_key" in st.session_state:
+                st.session_state["nav_key"] += 1
+            
+        else:
+            db.save_invoice(
+                inv_no, 
+                meta["client_name"], 
+                date.today().strftime("%Y-%m-%d"), 
+                grand, 
+                json.dumps(payload)
+            )
+            st.toast("Invoice saved! Resetting form...", icon="💾")
+            # Reset form for next input
+            cb_reset_transaction()
+        
+        # Delay to show toast, then refresh/redirect
+        import time
+        time.sleep(1.0)
+        st.rerun()
+            
+    except Exception as e:
+        st.error(f"Failed to save/update history: {e}")
 
 
 # ==============================================================================
@@ -1147,7 +1143,7 @@ def render_page() -> None:
         safe_float(st.session_state.get("inv_cashback", 0)),
     )
 
-    render_admin_panel(grand_total)
+    render_event_metadata()
     st.write("")
 
     left_col, right_col = st.columns([1.7, 1], gap="large")
@@ -1155,4 +1151,10 @@ def render_page() -> None:
         render_catalog_section(packages)
     with right_col:
         render_pos_section(subtotal, safe_float(st.session_state.get("inv_cashback", 0)), grand_total)
+        
+        # Payment Schedule now sits below POS card
+        st.write("")
+        render_payment_section(grand_total)
+        
+        # Final Actions
         render_download_section()
