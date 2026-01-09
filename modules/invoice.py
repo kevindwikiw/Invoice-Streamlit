@@ -204,9 +204,26 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     ribbon_drop = 15 * mm
 
     # --- Extract Data ---
+    hari_id = {
+        'Monday': 'Senin',
+        'Tuesday': 'Selasa',
+        'Wednesday': 'Rabu',
+        'Thursday': 'Kamis',
+        'Friday': 'Jumat',
+        'Saturday': 'Sabtu',
+        'Sunday': 'Minggu'
+    }
+    
+    date_raw = meta.get("date")
+    if date_raw:
+        dt = datetime.strptime(date_raw, '%d %B %Y')
+    else:
+        dt = datetime.today()
+    
+    date_str = f"{hari_id[dt.strftime('%A')]}, {dt.strftime('%d %B %Y')}"
+    
     inv_no = _safe_str(meta.get("inv_no", "0000"))
     title = _safe_str(meta.get("title", ""))
-    date_str = meta.get("date") or datetime.today().strftime("%d %B %Y")
     client = _safe_str(meta.get("client_name", "-"))
     
     wedding_date = _safe_str(meta.get("wedding_date", ""))
@@ -295,10 +312,10 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
 
     headers = [
         Paragraph("NO", style_header),
-        Paragraph("ITEM DESCRIPTION", ParagraphStyle("h_desc", parent=style_header, alignment=TA_LEFT)),
-        Paragraph("PRICE", ParagraphStyle("h_right", parent=style_header, alignment=TA_RIGHT)),
+        Paragraph("ITEM DESCRIPTION", ParagraphStyle("h_desc", parent=style_header, alignment=TA_CENTER)),
+        Paragraph("PRICE", ParagraphStyle("h_right", parent=style_header, alignment=TA_CENTER)),
         Paragraph("QTY", style_header),
-        Paragraph("TOTAL", ParagraphStyle("h_right", parent=style_header, alignment=TA_RIGHT)),
+        Paragraph("TOTAL", ParagraphStyle("h_right", parent=style_header, alignment=TA_CENTER)),
     ]
     
     data = [headers]
@@ -562,3 +579,4 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     c.save()
     buf.seek(0)
     return buf
+
