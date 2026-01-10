@@ -236,6 +236,7 @@ def update_invoice(invoice_id: int, invoice_no: str, client_name: str, date_str:
         with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
             c = conn.cursor()
             c.execute("""
+                UPDATE invoices
                 SET invoice_no=?, client_name=?, date=?, total_amount=?, invoice_data=?
                 WHERE id=?
             """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, invoice_id))
@@ -306,6 +307,30 @@ def set_config(key: str, value: str) -> None:
         conn.commit()
     except Exception as e:
         print(f"[DB ERROR] set_config failed: {e}")
+
+def get_next_invoice_seq(prefix: str) -> int:
+    """
+    Get and increment invoice sequence for a given client prefix.
+    Stores in app_config with key 'inv_seq_{PREFIX}'.
+    Returns the NEXT sequence number (already incremented).
+    """
+    config_key = f"inv_seq_{prefix}"
+    
+    # Get current value
+    current = get_config(config_key, "0")
+    try:
+        current_seq = int(current)
+    except:
+        current_seq = 0
+    
+    # Increment
+    next_seq = current_seq + 1
+    
+    # Save back
+    set_config(config_key, str(next_seq))
+    
+    return next_seq
+
 
 # ----------------------------------------------------
 # 2. READ OPERATIONS (CACHED)
