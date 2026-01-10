@@ -19,7 +19,7 @@ SORT_OPTIONS = {
     "Name: A → Z": ("name", True),
 }
 
-GRID_OPTIONS = {"3 cols": 3, "4 cols": 4}
+
 
 PAGE_SIZE_DEFAULT = 12
 DESC_PREVIEW_LINES = 3
@@ -375,7 +375,7 @@ def render_page():
 
     st.write("")
 
-    c1, c2, c3, c4, c5 = st.columns([2.2, 1.1, 1.2, 1.0, 1.35], vertical_alignment="bottom")
+    c1, c2, c3, c4 = st.columns([3, 1.5, 1.5, 1.5], vertical_alignment="bottom")
     with c1:
         q = st.text_input("🔎 Search", placeholder="Search name…", key="pkg_search")
     with c2:
@@ -383,15 +383,13 @@ def render_page():
     with c3:
         sort = st.selectbox("↕️ Sort", list(SORT_OPTIONS.keys()), key="pkg_sort")
     with c4:
-        grid_label = st.selectbox("🧩 Grid", list(GRID_OPTIONS.keys()), index=1, key="pkg_grid_cols")
-        cols_count = GRID_OPTIONS[grid_label]
-    with c5:
         st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
         if st.button("＋ Create", type="primary", use_container_width=True, key="pkg_create_btn"):
             st.session_state["_pkg_modal"] = ("add", None)
             st.rerun()
 
-    sig = (q, cat, sort, cols_count)
+    cols_count = 3
+    sig = (q, cat, sort)
     if st.session_state.get("_pkg_sig") != sig:
         st.session_state["_pkg_sig"] = sig
         st.session_state["_pkg_page"] = 1
