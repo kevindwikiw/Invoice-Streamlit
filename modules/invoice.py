@@ -264,10 +264,21 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
 
     _try_draw_logo(c, margin + 2*mm, H - top_bar_h + 2*mm, logo_block_w - 4*mm, top_bar_h - 4*mm, "assets/logo.png")
 
-    tail_pts = [(margin, H - top_bar_h), (margin + logo_block_w, H - top_bar_h), (margin, H - top_bar_h - ribbon_drop)]
+    # Ribbon "tail" triangle
+    tail_pts = [
+        (margin, H - top_bar_h),                      # Top left
+        (margin + logo_block_w, H - top_bar_h),       # Top right  
+        (margin, H - top_bar_h - ribbon_drop)         # Bottom tip
+    ]
     _draw_polygon(c, tail_pts, fill_color=BLACK, stroke=0)
+    
+    # White accent lines on triangle edges (drawn AFTER polygon so they're on top)
     c.setStrokeColor(WHITE)
+    c.setLineWidth(0.5)
+    # Right edge (diagonal) - from top-right to bottom tip
     c.line(tail_pts[1][0], tail_pts[1][1], tail_pts[2][0], tail_pts[2][1])
+    # Left edge - from TOP of header down to bottom tip (full height)
+    c.line(margin, H, margin, H - top_bar_h - ribbon_drop)
 
     invoice_title_text = "INVOICE"
     c.setFillColor(WHITE)
@@ -580,64 +591,107 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     # =========================================================
     proof_data = meta.get("payment_proof")
     if proof_data:
-        c.showPage() # Flush Page 1
-        
-        # Helper to load image from base64 or bytes
+        # Normalize to list
+        if not isinstance(proof_data, list):
+            proof_data = [proof_data]
+            
+        # Import moved to top-level ideally, but fine here
         try:
             from PIL import Image
             import base64
-            
-            img_stream = None
-            if isinstance(proof_data, str):
-                try:
-                    if "," in proof_data: proof_data = proof_data.split(",", 1)[1]
-                    img_bytes = base64.b64decode(proof_data)
-                    img_stream = BytesIO(img_bytes)
-                except: pass
-            elif isinstance(proof_data, (bytes, bytearray)):
-                img_stream = BytesIO(proof_data)
-            
-            if img_stream:
-                img = ImageReader(Image.open(img_stream))
-                iw, ih = img.getSize()
-                aspect = ih / float(iw)
+        except ImportError:
+            pass
 
-                # Fixed Width (A4 width - margins)
-                draw_w = W - 2*margin
+        for idx, p_item in enumerate(proof_data):
+            c.showPage() # Flush previous page (starts new page for this proof)
+            
+            try:
+                img_stream = None
+                if isinstance(p_item, str):
+                    try:
+                        if "," in p_item: p_item = p_item.split(",", 1)[1]
+                        img_bytes = base64.b64decode(p_item)
+                        img_stream = BytesIO(img_bytes)
+                    except: pass
+                elif isinstance(p_item, (bytes, bytearray)):
+                    img_stream = BytesIO(p_item)
                 
-                # Calculate needed height
-                draw_h = draw_w * aspect
-                
-                # Calculate needed Page Height
-                # If image is tall, extend page. If short, use at least A4.
-                header_h = top_bar_h
-                needed_H = header_h + draw_h + 2*margin
-                
-                final_H = max(H, needed_H)
-                
-                # Resize Page
-                c.setPageSize((W, final_H))
-                
-                # Draw Header (Fixed at top)
-                c.setFillColor(BLACK)
-                c.rect(0, final_H - header_h, W, header_h, fill=1, stroke=0)
-                c.setFillColor(WHITE)
-                c.setFont("Times-Bold", 18)
-                c.drawRightString(W - margin, final_H - 20 * mm, "PAYMENT PROOF")
-                
-                _try_draw_logo(c, margin + 2*mm, final_H - header_h + 2*mm, logo_block_w - 4*mm, header_h - 4*mm, "assets/logo.png")
-                
-                # Draw Image (below header)
-                # Bottom Y = Top Y - Image Height
-                img_y = final_H - header_h - margin - draw_h
-                c.drawImage(img, margin, img_y, width=draw_w, height=draw_h, mask="auto")
-                
-        except Exception as e:
-            # Fallback error on standard page
-            c.setPageSize(A4)
-            c.setFillColor(colors.red)
-            c.setFont("Helvetica-Bold", 12)
-            c.drawString(margin, H - 50*mm, f"Error displaying proof: {str(e)}")
+                if img_stream:
+                    img = ImageReader(Image.open(img_stream))
+                    iw, ih = img.getSize()
+                    aspect = ih / float(iw)
+
+                    # Fixed Width (A4 width - margins)
+                    draw_w = W - 2*margin
+                    
+                    # Calculate needed height
+                    draw_h = draw_w * aspect
+                    
+                    # Calculate needed Page Height (header + footer + image + margins)
+                    footer_h = 10 * mm
+                    needed_H = top_bar_h + ribbon_drop + draw_h + footer_h + 3*margin
+                    
+                    final_H = max(H, needed_H)
+                    
+                    # Resize Page
+                    c.setPageSize((W, final_H))
+                    
+                    # --- HEADER (matching main invoice) ---
+                    c.setFillColor(BLACK)
+                    c.rect(0, final_H - top_bar_h, W, top_bar_h, fill=1, stroke=0)
+                    
+                    # Logo separator line
+                    c.setStrokeColor(WHITE)
+                    c.setLineWidth(0.5)
+                    c.line(margin + logo_block_w, final_H - top_bar_h, margin + logo_block_w, final_H)
+                    
+                    # Logo
+                    _try_draw_logo(c, margin + 2*mm, final_H - top_bar_h + 2*mm, logo_block_w - 4*mm, top_bar_h - 4*mm, "assets/logo.png")
+                    
+                    # Ribbon triangle
+                    proof_tail_pts = [
+                        (margin, final_H - top_bar_h),
+                        (margin + logo_block_w, final_H - top_bar_h),
+                        (margin, final_H - top_bar_h - ribbon_drop)
+                    ]
+                    _draw_polygon(c, proof_tail_pts, fill_color=BLACK, stroke=0)
+                    
+                    # White accent lines
+                    c.setStrokeColor(WHITE)
+                    c.setLineWidth(0.5)
+                    c.line(proof_tail_pts[1][0], proof_tail_pts[1][1], proof_tail_pts[2][0], proof_tail_pts[2][1])
+                    c.line(margin, final_H, margin, final_H - top_bar_h - ribbon_drop)
+                    
+                    # Title with underline
+                    title = "PAYMENT PROOF"
+                    if len(proof_data) > 1:
+                        title += f" ({idx+1}/{len(proof_data)})"
+                    c.setFillColor(WHITE)
+                    c.setFont("Times-Bold", 22)
+                    c.drawRightString(W - margin, final_H - 20 * mm, title)
+                    
+                    # Underline
+                    title_width = c.stringWidth(title, "Times-Bold", 22)
+                    c.setLineWidth(1)
+                    c.line(W - margin - title_width, final_H - 22 * mm, W - margin, final_H - 22 * mm)
+                    
+                    # --- IMAGE ---
+                    img_y = final_H - top_bar_h - ribbon_drop - margin - draw_h
+                    c.drawImage(img, margin, img_y, width=draw_w, height=draw_h, mask="auto")
+                    
+                    # --- FOOTER (matching main invoice) ---
+                    _draw_footer_contact(c, W)
+                else:
+                    # corrupted item
+                    c.setPageSize(A4)
+                    c.drawString(margin, H - 50*mm, f"Proof {idx+1}: Invalid Data")
+
+            except Exception as e:
+                # Fallback error on standard page
+                c.setPageSize(A4)
+                c.setFillColor(colors.red)
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(margin, H - 50*mm, f"Error displaying proof {idx+1}: {str(e)}")
 
     c.showPage()
     c.save()
