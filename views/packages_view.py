@@ -1,7 +1,10 @@
 import streamlit as st
+# HAPUS IMPORT PANDAS
+# import pandas as pd 
 from modules import db
 from ui.components import page_header, section, danger_container
 from ui.formatters import rupiah
+from views.styles import inject_styles
 
 
 # =========================================================
@@ -293,60 +296,51 @@ def _render_grid(data: list, cols_count: int, page_size: int = PAGE_SIZE_DEFAULT
     for idx, row in enumerate(page_data):
         with cols[idx % cols_count]:
             is_main = (row['category'] == CATEGORIES[0])
-            badge_class = "badge-main" if is_main else "badge-addon"
-            badge_text = "◆ MAIN" if is_main else "✨ ADD-ON"
+            bg_color, txt_color = ("#e8f5e9", "#15803d") if is_main else ("#fff7ed", "#c2410c")
+            badge_text = "MAIN" if is_main else "ADD-ON"
 
             preview_html, more, full_lines = _desc_meta(row['description'], max_lines=DESC_PREVIEW_LINES)
-            full_html = "".join([f"<div class='desc-tooltip-line'>• {ln}</div>" for ln in full_lines])
-
+            
+            # Build tooltip for hover (same as invoice_view)
             tooltip_html = ""
-            if more > 0:
+            if full_lines and more > 0:
+                full_html = "".join([f"<div>• {ln}</div>" for ln in full_lines])
                 tooltip_html = (
-                    "<div class='desc-tooltip'>"
-                    "<div class='desc-tooltip-title'>📋 Full details</div>"
-                    f"{full_html}"
-                    "</div>"
+                    "<div class='tip'><b>📋 Full Details</b>"
+                    f"<div style='margin-top:6px;'>{full_html}</div></div>"
                 )
 
+            # Description preview
             if preview_html:
-                details_html = f"<div class='desc-clamp'>{preview_html}</div>"
+                desc_display = preview_html.replace("\n", "<br/>")
             else:
-                details_html = "<div class='mini-muted' style='margin-top:10px;'>No details.</div>"
-
-            more_html = f"<div class='desc-more'>+{more} more…</div>" if more > 0 else ""
+                desc_display = "No details."
+                
+            more_text = f"<div style='color:#3b82f6; font-size:.75rem; margin-top:4px;'>+{more} more…</div>" if more > 0 else ""
 
             st.markdown(
                 f"""
-                <div class="mini-card">
-                  <div class="card-topbar">
-                    <span class="badge {badge_class}">{badge_text}</span>
-                  </div>
-
-                  <div class="mini-title">{row['name']}</div>
-                  <div class="mini-price">{rupiah(row['price'])}</div>
-
-                  <div class="mini-body">
-                    {details_html}
-                    {more_html}
-                  </div>
-
+                <div class="card" style="border:1px solid #f3f4f6;">
+                  <span class="pill" style="background:{bg_color}; color:{txt_color};">{badge_text}</span>
+                  <div class="title">{row['name']}</div>
+                  <div class="price">{rupiah(row['price'])}</div>
+                  <div class="desc">{desc_display}{more_text}</div>
                   {tooltip_html}
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-            st.markdown("<div class='card-actions-gap'></div>", unsafe_allow_html=True)
-
+            # Action Buttons (Edit / Delete)
             a1, a2 = st.columns([1, 1])
             with a1:
-                if st.button("✏️", key=f"grid_edit_{row['id']}", use_container_width=True):
+                if st.button("✏️ Edit", key=f"grid_edit_{row['id']}", use_container_width=True):
                     st.session_state["_pkg_modal"] = ("edit", int(row['id']))
                     st.rerun()
 
             with a2:
                 with danger_container(key=f"danger_card_{row['id']}"):
-                    if st.button("🗑️", key=f"grid_del_{row['id']}", use_container_width=True):
+                    if st.button("🗑️ Delete", key=f"grid_del_{row['id']}", use_container_width=True):
                         st.session_state["_pkg_modal"] = ("delete", int(row['id']))
                         st.rerun()
 
@@ -357,6 +351,7 @@ def _render_grid(data: list, cols_count: int, page_size: int = PAGE_SIZE_DEFAULT
 # 5) PAGE
 # =========================================================
 def render_page():
+    inject_styles()
     page_header(
         "📦 Packages Database",
         "Streamline your service catalog. Ensure consistency in package names, pricing, and details for accurate invoicing.",
