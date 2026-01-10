@@ -1,11 +1,35 @@
 import json
 import streamlit as st
 from datetime import datetime
+from typing import Optional
 
 from modules import db, invoice as invoice_mod
 from ui.components import page_header
 from ui.formatters import rupiah
 from views.styles import inject_styles
+
+
+# Removed cache to ensure updates are reflected immediately
+def _get_invoice_pdf(invoice_id: int) -> Optional[bytes]:
+    """Generate PDF from stored invoice data (cached for 5 min)."""
+    try:
+        detail = db.get_invoice_details(invoice_id)
+        if not detail:
+            return None
+        
+        payload = json.loads(detail["invoice_data"])
+        meta = payload.get("meta", {})
+        items = payload.get("items", [])
+        grand_total = payload.get("grand_total", 0)
+        
+        pdf_bytes = invoice_mod.generate_pdf_bytes(meta, items, grand_total)
+        
+        if hasattr(pdf_bytes, 'read'):
+            pdf_bytes.seek(0)
+            return pdf_bytes.read()
+        return pdf_bytes
+    except Exception:
+        return None
 
 
 def render_page():
@@ -102,8 +126,19 @@ def render_page():
                     if st.button("✏️", key=f"ed_{inv_id}", help="Edit"):
                         _handle_edit(inv_id)
                 with btn2:
-                    if st.button("📄", key=f"pr_{inv_id}", help="Reprint PDF"):
-                        _handle_reprint(inv_id)
+                    # Direct download - generate PDF and provide download button
+                    pdf_data = _get_invoice_pdf(inv_id)
+                    if pdf_data:
+                        st.download_button(
+                            "📥", 
+                            data=pdf_data, 
+                            file_name=f"{inv_no.replace('/', '_')}.pdf",
+                            mime="application/pdf",
+                            key=f"dl_{inv_id}",
+                            help="Download PDF"
+                        )
+                    else:
+                        st.button("📥", key=f"dl_err_{inv_id}", disabled=True, help="PDF Error")
                 with btn3:
                     if st.button("🗑️", key=f"del_{inv_id}", help="Delete"):
                         st.session_state[f"confirm_del_{inv_id}"] = True
@@ -141,6 +176,7 @@ def _handle_edit(invoice_id: int):
         st.session_state["inv_no"] = meta.get("inv_no", "")
         st.session_state["inv_title"] = meta.get("title", "")
         st.session_state["inv_client_name"] = meta.get("client_name", "")
+        st.session_state["inv_client_phone"] = meta.get("client_phone", "")  # Backward compatible
         st.session_state["inv_client_email"] = meta.get("client_email", "")
         st.session_state["inv_venue"] = meta.get("venue", "")
         
@@ -153,10 +189,24 @@ def _handle_edit(invoice_id: int):
             pass
             
         st.session_state["inv_cashback"] = float(meta.get("cashback", 0))
-        st.session_state["pay_dp1"] = int(meta.get("pay_dp1", 0))
-        st.session_state["pay_term2"] = int(meta.get("pay_term2", 0))
-        st.session_state["pay_term3"] = int(meta.get("pay_term3", 0))
-        st.session_state["pay_full"] = int(meta.get("pay_full", 0))
+        
+        # Restore payment terms - backward compatible
+        payment_terms = meta.get("payment_terms")
+        if payment_terms:
+            st.session_state["payment_terms"] = payment_terms
+        else:
+            # Convert old format to new
+            st.session_state["payment_terms"] = [
+                {"id": "dp", "label": "Down Payment", "amount": int(meta.get("pay_dp1", 0)), "locked": True},
+                {"id": "t2", "label": "Payment 2", "amount": int(meta.get("pay_term2", 0)), "locked": False},
+                {"id": "t3", "label": "Payment 3", "amount": int(meta.get("pay_term3", 0)), "locked": False},
+                {"id": "full", "label": "Pelunasan", "amount": int(meta.get("pay_full", 0)), "locked": True},
+            ]
+            # Remove zero-amount middle terms for cleaner UI
+            st.session_state["payment_terms"] = [
+                t for t in st.session_state["payment_terms"] 
+                if t.get("locked") or t.get("amount", 0) > 0
+            ]
         
         st.session_state["inv_terms"] = meta.get("terms", "")
         st.session_state["bank_nm"] = meta.get("bank_name", "")
