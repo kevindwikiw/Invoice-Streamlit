@@ -204,23 +204,27 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     ribbon_drop = 15 * mm
 
     # --- Extract Data ---
+    # Indonesian day names
     hari_id = {
-        'Monday': 'Senin',
-        'Tuesday': 'Selasa',
-        'Wednesday': 'Rabu',
-        'Thursday': 'Kamis',
-        'Friday': 'Jumat',
-        'Saturday': 'Sabtu',
-        'Sunday': 'Minggu'
+        0: 'Senin',    # Monday
+        1: 'Selasa',   # Tuesday
+        2: 'Rabu',     # Wednesday
+        3: 'Kamis',    # Thursday
+        4: 'Jumat',    # Friday
+        5: 'Sabtu',    # Saturday
+        6: 'Minggu'    # Sunday
     }
     
-    date_raw = meta.get("date")
-    if date_raw:
-        dt = datetime.strptime(date_raw, '%d %B %Y')
-    else:
-        dt = datetime.today()
+    # Indonesian month names
+    bulan_id = {
+        1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April',
+        5: 'Mei', 6: 'Juni', 7: 'Juli', 8: 'Agustus',
+        9: 'September', 10: 'Oktober', 11: 'November', 12: 'Desember'
+    }
     
-    date_str = f"{hari_id[dt.strftime('%A')]}, {dt.strftime('%d %B %Y')}"
+    # Use today's date (ignore meta["date"] to avoid parsing issues)
+    dt = datetime.today()
+    date_str = f"{hari_id[dt.weekday()]}, {dt.day} {bulan_id[dt.month]} {dt.year}"
     
     inv_no = _safe_str(meta.get("inv_no", "0000"))
     title = _safe_str(meta.get("title", ""))
@@ -238,17 +242,23 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     subtotal = float(meta.get("subtotal", 0))
     cashback = float(meta.get("cashback", 0))
 
-    p_dp1 = float(meta.get("pay_dp1", 0))
-    p_t2 = float(meta.get("pay_term2", 0))
-    p_t3 = float(meta.get("pay_term3", 0))
-    p_full = float(meta.get("pay_full", 0))
-
-    payment_plan = [
-        ("Down Payment", p_dp1),
-        ("Payment 2", p_t2),
-        ("Payment 3", p_t3),
-        ("Pelunasan", p_full),
-    ]
+    # Dynamic payment terms - backward compatible
+    payment_terms = meta.get("payment_terms", [])
+    if not payment_terms:
+        # Fallback to old format for backward compatibility
+        p_dp1 = float(meta.get("pay_dp1", 0))
+        p_t2 = float(meta.get("pay_term2", 0))
+        p_t3 = float(meta.get("pay_term3", 0))
+        p_full = float(meta.get("pay_full", 0))
+        payment_terms = [
+            {"label": "Down Payment", "amount": p_dp1},
+            {"label": "Payment 2", "amount": p_t2},
+            {"label": "Payment 3", "amount": p_t3},
+            {"label": "Pelunasan", "amount": p_full},
+        ]
+    
+    # Build payment plan from terms (only non-zero amounts)
+    payment_plan = [(t.get("label", "Payment"), float(t.get("amount", 0))) for t in payment_terms]
 
     total_paid_scheduled = sum(amt for _, amt in payment_plan)
     remaining = max(0, grand_total - total_paid_scheduled)
@@ -306,9 +316,16 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
         c.setFont("Helvetica-Oblique", 8)
         c.drawRightString(W - margin - 60 * mm, y_meta - 9 * mm, title)
 
+    # Vertical divider line - aligned with RIGHT edge of PRICE column
+    # Table columns from right: TOTAL(31mm) + QTY(12mm) = 43mm
+    divider_x = W - margin - 43 * mm
+    c.setStrokeColor(colors.HexColor("#e2e8f0"))  # Light gray
+    c.setLineWidth(0.5)
+    c.line(divider_x, y_meta + 3*mm, divider_x, y_meta - 12*mm)
+
     c.setFillColor(DARK_GRAY)
     c.setFont("Helvetica", 8)
-    c.drawRightString(W - margin, y_meta, f"Invoice #: {inv_no}")
+    c.drawRightString(W - margin, y_meta, f"Invoice: {inv_no}")
     c.drawRightString(W - margin, y_meta - 4 * mm, f"Date: {date_str}")
 
 
@@ -393,14 +410,13 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     summary_rows = []
     row_meta = [] 
 
-    # 1. TOTAL (Filled Black)
-    summary_rows.append(["", "", "TOTAL:", "", _fmt_currency(subtotal)])
-    row_meta.append("total")
-
-    # 2. Cashback
+    # 1. TOTAL & Cashback (Only if cashback > 0)
     if cashback > 0:
-        summary_rows.append(["", "", "Cashback:", "", f"- {_fmt_currency(cashback)}"])
-        row_meta.append("cashback")
+         summary_rows.append(["", "", "TOTAL:", "", _fmt_currency(subtotal)])
+         row_meta.append("total")
+         
+         summary_rows.append(["", "", "Cashback:", "", f"- {_fmt_currency(cashback)}"])
+         row_meta.append("cashback")
 
     # 3. GRAND TOTAL (Filled Black)
     summary_rows.append(["", "", "GRAND TOTAL:", "", _fmt_currency(grand_total)])
@@ -499,6 +515,11 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     left_x = margin
     info_w = col_widths[0] + col_widths[1] - 5*mm 
 
+    # Fixed width for labels to align colons
+    label_w = 18 * mm
+    colon_x = left_x + label_w
+    val_x = colon_x + 2 * mm
+
     # Event Details
     if wedding_date or venue:
         info_y = _draw_underlined_header(c, "EVENT DETAILS:", left_x, info_y)
@@ -506,15 +527,17 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
         c.setFillColor(BLACK)
         if wedding_date:
             c.setFont("Helvetica-Bold", 8)
-            c.drawString(left_x, info_y, "Date:")
+            c.drawString(left_x, info_y, "Date")
+            c.drawString(colon_x, info_y, ":")
             c.setFont("Helvetica", 8)
-            c.drawString(left_x + 10*mm, info_y, wedding_date)
+            c.drawString(val_x, info_y, wedding_date)
             info_y -= 4 * mm
         if venue:
             c.setFont("Helvetica-Bold", 8)
-            c.drawString(left_x, info_y, "Venue:")
+            c.drawString(left_x, info_y, "Venue")
+            c.drawString(colon_x, info_y, ":")
             c.setFont("Helvetica", 8)
-            c.drawString(left_x + 10*mm, info_y, venue)
+            c.drawString(val_x, info_y, venue)
             info_y -= 8 * mm 
             
     # Payment Info
@@ -523,21 +546,24 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     c.setFillColor(BLACK)
     
     c.setFont("Helvetica-Bold", 8)
-    c.drawString(left_x, info_y, "Bank:")
+    c.drawString(left_x, info_y, "Bank")
+    c.drawString(colon_x, info_y, ":")
     c.setFont("Helvetica", 8)
-    c.drawString(left_x + 15*mm, info_y, bank_nm)
+    c.drawString(val_x, info_y, bank_nm)
     info_y -= 4 * mm
     
     c.setFont("Helvetica-Bold", 8)
-    c.drawString(left_x, info_y, "Account:")
+    c.drawString(left_x, info_y, "Account")
+    c.drawString(colon_x, info_y, ":")
     c.setFont("Helvetica", 8)
-    c.drawString(left_x + 15*mm, info_y, bank_ac)
+    c.drawString(val_x, info_y, bank_ac)
     info_y -= 4 * mm
     
     c.setFont("Helvetica-Bold", 8)
-    c.drawString(left_x, info_y, "A/N:")
+    c.drawString(left_x, info_y, "A/N")
+    c.drawString(colon_x, info_y, ":")
     c.setFont("Helvetica", 8)
-    c.drawString(left_x + 15*mm, info_y, bank_an)
+    c.drawString(val_x, info_y, bank_an)
     info_y -= 8 * mm
 
     # Terms & Conditions (Table Layout for Perfect Hanging Indent)
