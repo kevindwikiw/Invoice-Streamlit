@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Tuple
 # --- Internal Modules ---
 from modules import db
 from modules import invoice as invoice_mod
-from modules import gdrive
+
 from modules.utils import (
     safe_float, safe_int, normalize_db_records, calculate_totals,
     sanitize_text, desc_to_lines, normalize_desc_text, 
