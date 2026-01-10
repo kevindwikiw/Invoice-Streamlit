@@ -154,15 +154,16 @@ def initialize_session_state() -> None:
         "inv_title": db_conf["title"],
         "inv_no": f"INV/{datetime.now().strftime('%m')}/2026",
         "inv_client_name": "",
+        "inv_client_phone": "",
         "inv_client_email": "",
         "inv_wedding_date": date.today() + timedelta(days=90),
         "inv_venue": "",
 
-        # Payment Schedule
-        "pay_dp1": 0,
-        "pay_term2": 0,
-        "pay_term3": 0,
-        "pay_full": 0,
+        # Payment Schedule - Dynamic terms (min 2: DP + Pelunasan)
+        "payment_terms": [
+            {"id": "dp", "label": "Down Payment", "amount": 0, "locked": True},
+            {"id": "full", "label": "Pelunasan", "amount": 0, "locked": True},
+        ],
 
         # Configs
         "inv_terms": db_conf["terms"],
@@ -189,6 +190,7 @@ def initialize_session_state() -> None:
 
 def invalidate_pdf() -> None:
     st.session_state["generated_pdf_bytes"] = None
+    st.session_state["pdf_downloaded"] = False
 
 def _cleanup_qty_keys_for_item(item: Dict[str, Any]) -> None:
     item_id = item.get("__id")
@@ -394,16 +396,17 @@ def cb_reset_transaction() -> None:
     db_conf = load_db_settings()
     st.session_state["inv_title"] = db_conf["title"]
     st.session_state["inv_client_name"] = ""
+    st.session_state["inv_client_phone"] = ""
     st.session_state["inv_client_email"] = ""
     st.session_state["inv_venue"] = ""
     st.session_state["inv_wedding_date"] = date.today() + timedelta(days=90)
     # Default Invoice No (Auto-gen for next ID usually better, here simplistic)
     st.session_state["inv_no"] = f"INV/{datetime.now().strftime('%m')}/2026"
     
-    st.session_state["pay_dp1"] = 0
-    st.session_state["pay_term2"] = 0
-    st.session_state["pay_term3"] = 0
-    st.session_state["pay_full"] = 0
+    st.session_state["payment_terms"] = [
+        {"id": "dp", "label": "Down Payment", "amount": 0, "locked": True},
+        {"id": "full", "label": "Pelunasan", "amount": 0, "locked": True},
+    ]
     st.session_state["editing_invoice_id"] = None  # Clear edit mode
     cleanup_all_qty_keys()
     cleanup_all_bundle_price_keys()
@@ -411,8 +414,9 @@ def cb_reset_transaction() -> None:
     # Reset file uploader widget by changing its key
     st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
     
-    # Force scroll to top by incrementing nav_key
+    # Force refresh to close popover and scroll to top
     st.session_state["nav_key"] = st.session_state.get("nav_key", 0) + 1
+    st.session_state["_needs_rerun"] = True
     
     st.toast("Form reset! Starting fresh.", icon="🆕")
 
@@ -582,16 +586,17 @@ def render_event_metadata() -> None:
     
     st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
     
-    # Client Row - symmetric columns
-    c4, c5, c6 = st.columns([1, 1, 1])
+    # Client Row - with phone for WhatsApp
+    c4, c5, c6, c7 = st.columns([1.2, 1, 1, 1])
     c4.text_input("Event / Title", key="inv_title", placeholder="e.g. Wedding Reception 2026", on_change=invalidate_pdf)
-    c5.text_input("Client Name", key="inv_client_name", placeholder="CPW & CPP", on_change=cb_update_invoice_no)
-    c6.text_input("Email", key="inv_client_email", placeholder="client@email.com", on_change=invalidate_pdf)
+    c5.text_input("Client Name", key="inv_client_name", placeholder="CPW & CPP", on_change=invalidate_pdf)
+    c6.text_input("Client WhatsApp", key="inv_client_phone", placeholder="6281234567890", on_change=invalidate_pdf)
+    c7.text_input("Email", key="inv_client_email", placeholder="client@email.com", on_change=invalidate_pdf)
     
     st.markdown("</div>", unsafe_allow_html=True) # End Card 1
 
-    # Banking Config (Collapsible) - Moved here to reduce Right Col height
-    with st.expander("🏦 Bank & Terms Config"):
+    # Banking & WhatsApp Config (Collapsible)
+    with st.expander("🏦 Bank, Terms & WhatsApp Config"):
         b_col1, b_col2, b_col3 = st.columns(3)
         b_col1.text_input("Bank Name", key="bank_nm", on_change=invalidate_pdf)
         b_col2.text_input("Account No", key="bank_ac", on_change=invalidate_pdf)
@@ -599,12 +604,33 @@ def render_event_metadata() -> None:
         
         st.text_area("Terms & Conditions", key="inv_terms", height=100, on_change=invalidate_pdf)
         
-        if st.button("💾 Save Settings", help="Save as defaults", use_container_width=True):
+        st.divider()
+        st.caption("📱 **WhatsApp Template** - Gunakan placeholder: `{nama}`, `{inv_no}`")
+        
+        default_wa_template = """Halo Kak {nama}! 👋
+
+Terima kasih sudah mempercayakan momen spesial Anda kepada kami. ✨
+
+Berikut detail invoice Anda:
+📄 Invoice: {inv_no}
+
+Silakan cek file invoice yang sudah kami kirimkan ya. Jika ada pertanyaan, jangan ragu untuk menghubungi kami.
+
+Warm regards,
+ORBIT Team 🎬"""
+        
+        if "wa_template" not in st.session_state:
+            st.session_state["wa_template"] = db.get_config("wa_template_default") or default_wa_template
+        
+        st.text_area("WhatsApp Template", key="wa_template", height=200)
+        
+        if st.button("💾 Save All Settings", help="Save as defaults", use_container_width=True):
             db.set_config("bank_nm_default", st.session_state["bank_nm"])
             db.set_config("bank_ac_default", st.session_state["bank_ac"])
             db.set_config("bank_an_default", st.session_state["bank_an"])
             db.set_config("inv_terms_default", st.session_state["inv_terms"])
-            st.toast("Settings saved!", icon="✅")
+            db.set_config("wa_template_default", st.session_state["wa_template"])
+            st.toast("All settings saved!", icon="✅")
 
 
 def render_payment_section(grand_total: float) -> None:
@@ -619,21 +645,36 @@ def render_payment_section(grand_total: float) -> None:
         unsafe_allow_html=True
     )
 
-    dp1 = safe_int(st.session_state.get("pay_dp1", 0), 0)
-    t2 = safe_int(st.session_state.get("pay_term2", 0), 0)
-    t3 = safe_int(st.session_state.get("pay_term3", 0), 0)
-    full = safe_int(st.session_state.get("pay_full", 0), 0)
-
-    status, msg, _ = payment_integrity_status(grand_total, dp1, t2, t3, full)
-
-    if status == "BALANCED":
-        badge_cls = "badg-green"
-    elif status == "UNALLOCATED":
-        badge_cls = "badg-orange" 
-    elif status == "OVER":
-        badge_cls = "badg-red"
+    # Get payment terms from session state
+    terms = st.session_state.get("payment_terms", [])
+    if not terms:
+        terms = [
+            {"id": "dp", "label": "Down Payment", "amount": 0, "locked": True},
+            {"id": "full", "label": "Pelunasan", "amount": 0, "locked": True},
+        ]
+        st.session_state["payment_terms"] = terms
+    
+    # Calculate totals - read from widget keys for real-time values
+    total_paid = 0
+    for t in terms:
+        term_id = t.get("id", "")
+        amt_key = f"pay_amt_{term_id}"
+        # Use widget key value if exists, else term amount
+        amt = st.session_state.get(amt_key, t.get("amount", 0))
+        total_paid += int(amt) if amt else 0
+    remaining = grand_total - total_paid
+    
+    # Status calculation
+    if grand_total <= 0:
+        status, msg = "INFO", "Add items to cart to calculate payments."
+    elif remaining == 0:
+        status, msg = "BALANCED", "Payment fully allocated!"
+    elif remaining > 0:
+        status, msg = "UNALLOCATED", f"Remaining: Rp {remaining:,.0f}".replace(",", ".")
     else:
-        badge_cls = "badg-blue"
+        status, msg = "OVER", f"Over by: Rp {abs(remaining):,.0f}".replace(",", ".")
+    
+    badge_cls = {"BALANCED": "badg-green", "UNALLOCATED": "badg-orange", "OVER": "badg-red"}.get(status, "badg-blue")
 
     # Status Bar
     st.markdown(
@@ -651,47 +692,138 @@ def render_payment_section(grand_total: float) -> None:
         unsafe_allow_html=True,
     )
 
-    # Input Grid with formatted captions
-    row1, row2, row3, row4 = st.columns(4)
-    
-    with row1:
-        st.number_input("DP 1", step=PAYMENT_STEP, key="pay_dp1", on_change=invalidate_pdf)
-        dp1_val = safe_int(st.session_state.get("pay_dp1", 0))
-        if dp1_val > 0:
-            st.caption(f"Rp {dp1_val:,}".replace(",", "."))
-    
-    with row2:
-        st.number_input("Term 2", step=PAYMENT_STEP, key="pay_term2", on_change=invalidate_pdf)
-        t2_val = safe_int(st.session_state.get("pay_term2", 0))
-        if t2_val > 0:
-            st.caption(f"Rp {t2_val:,}".replace(",", "."))
-    
-    with row3:
-        st.number_input("Term 3", step=PAYMENT_STEP, key="pay_term3", on_change=invalidate_pdf)
-        t3_val = safe_int(st.session_state.get("pay_term3", 0))
-        if t3_val > 0:
-            st.caption(f"Rp {t3_val:,}".replace(",", "."))
-    
-    with row4:
-        st.number_input("Pelunasan", step=PAYMENT_STEP, key="pay_full", on_change=invalidate_pdf)
-        full_val = safe_int(st.session_state.get("pay_full", 0))
-        if full_val > 0:
-            st.caption(f"Rp {full_val:,}".replace(",", "."))
+    # Dynamic Payment Terms UI
+    for idx, term in enumerate(terms):
+        term_id = term.get("id", f"term_{idx}")
+        is_locked = term.get("locked", False)
+        label_key = f"pay_label_{term_id}"
+        amt_key = f"pay_amt_{term_id}"
+        
+        col_label, col_amount, col_action = st.columns([2, 2, 0.5])
+        
+        with col_label:
+            k_args = {"value": term.get("label", f"Payment {idx+1}")}
+            if label_key in st.session_state:
+                 k_args.pop("value", None)
+            
+            st.text_input(
+                "Label", 
+                key=label_key,
+                label_visibility="collapsed",
+                disabled=is_locked,
+                on_change=invalidate_pdf,
+                **k_args
+            )
+        
+        with col_amount:
+            n_args = {"value": term.get("amount", 0)}
+            if amt_key in st.session_state:
+                 n_args.pop("value", None)
+                 
+            st.number_input(
+                "Amount",
+                step=PAYMENT_STEP,
+                key=amt_key,
+                label_visibility="collapsed",
+                on_change=invalidate_pdf,
+                **n_args
+            )
+        
+        # Sync widget values back to payment_terms list
+        if label_key in st.session_state and not is_locked:
+            st.session_state["payment_terms"][idx]["label"] = st.session_state[label_key]
+        if amt_key in st.session_state:
+            st.session_state["payment_terms"][idx]["amount"] = int(st.session_state[amt_key])
+        
+        with col_action:
+            if is_locked:
+                st.markdown("🔒", help="Required term")
+            elif len(terms) > 2:  # Only allow delete if > 2 terms
+                if st.button("🗑️", key=f"del_term_{term_id}", help="Remove term"):
+                    st.session_state["payment_terms"].pop(idx)
+                    invalidate_pdf()
+                    st.rerun()
+            else:
+                st.write("")  # Empty placeholder
+        
+        # Show formatted amount caption (from synced value)
+        current_amt = st.session_state.get(amt_key, term.get("amount", 0))
+        if current_amt > 0:
+            st.caption(f"Rp {int(current_amt):,}".replace(",", "."))
 
-    # Buttons
+    # Add Term Button (max 6 terms)
+    st.write("")
+    if len(terms) < 6:
+        if st.button("➕ Add Payment Term", use_container_width=True):
+            new_id = f"t{len(terms)+1}_{datetime.now().strftime('%H%M%S')}"
+            # Insert before Pelunasan (last locked term)
+            pelunasan_idx = next((i for i, t in enumerate(terms) if t.get("id") == "full"), len(terms))
+            new_term = {"id": new_id, "label": f"Payment {len(terms)}", "amount": 0, "locked": False}
+            st.session_state["payment_terms"].insert(pelunasan_idx, new_term)
+            invalidate_pdf()
+            st.rerun()
+    
+    # Action Buttons
     st.write("")
     btn_col1, btn_col2 = st.columns(2)
+    
+    def cb_auto_split_dynamic():
+        terms = st.session_state.get("payment_terms", [])
+        if len(terms) > 0 and grand_total > 0:
+            split = int(grand_total / len(terms))
+            # Calculate total split to handle rounding
+            total_split = 0
+            for i, t in enumerate(terms):
+                amt = split
+                if i == len(terms) - 1:
+                    amt = int(grand_total) - total_split
+                
+                # Update list
+                st.session_state["payment_terms"][i]["amount"] = amt
+                
+                # Update widget key (CRITICAL for UI sync)
+                t_id = t.get("id", f"term_{i}")
+                k = f"pay_amt_{t_id}"
+                if k in st.session_state:
+                    st.session_state[k] = amt
+                
+                total_split += amt
+        invalidate_pdf()
+    
+    def cb_fill_remaining_dynamic():
+        terms = st.session_state.get("payment_terms", [])
+        # Sum all EXCEPT the last one (Pelunasan)
+        # We must read from widget keys to get latest user edits
+        total_others = 0
+        for i, t in enumerate(terms[:-1]):
+            t_id = t.get("id", f"term_{i}")
+            k = f"pay_amt_{t_id}"
+            val = st.session_state.get(k, t.get("amount", 0))
+            total_others += int(val)
+            
+        remaining = max(0, int(grand_total - total_others))
+        
+        # Set to Pelunasan (last term)
+        if terms:
+            last_idx = len(terms) - 1
+            st.session_state["payment_terms"][last_idx]["amount"] = remaining
+            
+            # Update widget key
+            t_id = terms[last_idx].get("id", f"term_{last_idx}")
+            k = f"pay_amt_{t_id}"
+            if k in st.session_state:
+                st.session_state[k] = remaining
+        invalidate_pdf()
+    
     btn_col1.button(
-        "Auto Split 4",
-        on_click=cb_auto_split_payments,
-        args=(grand_total,),
+        f"Auto Split {len(terms)}",
+        on_click=cb_auto_split_dynamic,
         disabled=(grand_total <= 0),
         use_container_width=True,
     )
     btn_col2.button(
         "Fill Remaining → Pelunasan",
-        on_click=cb_fill_remaining_payment,
-        args=(grand_total,),
+        on_click=cb_fill_remaining_dynamic,
         disabled=(grand_total <= 0),
         use_container_width=True,
     )
@@ -802,22 +934,16 @@ def render_payment_section(grand_total: float) -> None:
         inv_no = st.session_state.get("inv_no", "invoice").replace("/", "_")
         client_email = (st.session_state.get("inv_client_email") or "").strip()
         
-        # Row 1: Download + Re-process
-        dl_col, re_col = st.columns(2)
-        with dl_col:
-            st.download_button(
-                "📥 Download PDF",
-                data=pdf_bytes,
-                file_name=f"{inv_no}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-                type="primary"
-            )
-        with re_col:
-            if st.button("🔄 Re-process PDF", use_container_width=True, disabled=not is_valid_order):
-                invalidate_pdf()  # Clear current PDF
-                generate_pdf_wrapper(current_sub, grand_total)
-                st.rerun()
+        # Row 1: Download PDF (full width)
+        if st.download_button(
+            "📥 Download PDF",
+            data=pdf_bytes,
+            file_name=f"{inv_no}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            type="primary"
+        ):
+            st.session_state["pdf_downloaded"] = True
         
         # Row 2: Save to History + Start New
         save_col, new_col = st.columns(2)
@@ -831,9 +957,54 @@ def render_payment_section(grand_total: float) -> None:
         with new_col:
             if st.button("🆕 New Invoice", use_container_width=True, on_click=cb_reset_transaction):
                 pass
+        
+        # Row 3: WhatsApp Share (requires download first)
+        client_phone = (st.session_state.get("inv_client_phone") or "").strip()
+        client_name = st.session_state.get("inv_client_name", "")
+        has_downloaded = st.session_state.get("pdf_downloaded", False)
+        
+        if client_phone and has_downloaded:
+            # Clean phone number (remove +, spaces, dashes)
+            clean_phone = "".join(filter(str.isdigit, client_phone))
+            if not clean_phone.startswith("62"):
+                if clean_phone.startswith("0"):
+                    clean_phone = "62" + clean_phone[1:]
+                else:
+                    clean_phone = "62" + clean_phone
+            
+            # Use configurable template with placeholder substitution
+            wa_template = st.session_state.get("wa_template", "Halo {nama}! Invoice: {inv_no}")
+            wa_message = wa_template.replace("{nama}", client_name).replace("{inv_no}", inv_no)
+            
+            import urllib.parse
+            encoded_msg = urllib.parse.quote(wa_message)
+            wa_link = f"https://wa.me/{clean_phone}?text={encoded_msg}"
+            
+            st.link_button("📱 Share via WhatsApp", wa_link, use_container_width=True)
+        elif client_phone and not has_downloaded:
+            st.button("📱 Share via WhatsApp", disabled=True, use_container_width=True, help="Download PDF dulu sebelum share")
+        else:
+            st.button("📱 Share via WhatsApp", disabled=True, use_container_width=True, help="Isi Client WhatsApp dulu")
     else:
-        # --- No PDF yet: Show Process button ---
-        if act_col2.button("🚀 Process Invoice & PDF", type="primary", use_container_width=True, disabled=not is_valid_order):
+        # --- No PDF yet: Validate and show Process button ---
+        
+        # Check required Event Details
+        client_name = (st.session_state.get("inv_client_name") or "").strip()
+        inv_no = (st.session_state.get("inv_no") or "").strip()
+        
+        missing_fields = []
+        if not client_name:
+            missing_fields.append("Client Name")
+        if not inv_no:
+            missing_fields.append("Invoice No")
+        
+        is_complete = len(missing_fields) == 0
+        can_process = is_valid_order and is_complete
+        
+        if missing_fields and is_valid_order:
+            st.warning(f"⚠️ Lengkapi dulu: **{', '.join(missing_fields)}**")
+        
+        if act_col2.button("🚀 Process Invoice & PDF", type="primary", use_container_width=True, disabled=not can_process):
             generate_pdf_wrapper(current_sub, grand_total)
             st.rerun()
 
@@ -1144,10 +1315,7 @@ def generate_pdf_wrapper(subtotal: float, grand_total: float) -> None:
             "venue": st.session_state.get("inv_venue", ""),
             "subtotal": subtotal,
             "cashback": st.session_state.get("inv_cashback", 0),
-            "pay_dp1": st.session_state.get("pay_dp1", 0),
-            "pay_term2": st.session_state.get("pay_term2", 0),
-            "pay_term3": st.session_state.get("pay_term3", 0),
-            "pay_full": st.session_state.get("pay_full", 0),
+            "payment_terms": st.session_state.get("payment_terms", []),
             "terms": st.session_state.get("inv_terms", ""),
             "bank_name": st.session_state.get("bank_nm", ""),
             "bank_acc": st.session_state.get("bank_ac", ""),
@@ -1214,12 +1382,21 @@ def render_download_section() -> None:
         # if col2.button("☁️ Share Email", type="primary", use_container_width=True):
         #    # ... existing logic masked out ...
 
-        # Save to History
-        edit_id = st.session_state.get("editing_invoice_id")
-        btn_label = f"💾 Update History (#{edit_id})" if edit_id else "💾 Save to History"
+        # Row 2: Save to History + Start New
+        save_col, new_col = st.columns(2)
         
-        if st.button(btn_label, use_container_width=True, on_click=_handle_save_history, args=(inv_no, email_recipient, pdf_bytes)):
-             pass # Logic moved to callback
+        edit_id = st.session_state.get("editing_invoice_id")
+        save_label = f"💾 Update (#{edit_id})" if edit_id else "💾 Save to History"
+        
+        with save_col:
+            # Use body execution (not callback) to ensure payment_terms are synced from widgets
+            if st.button(save_label, use_container_width=True):
+                _handle_save_history(inv_no, email_recipient, pdf_bytes)
+                
+        with new_col:
+            if st.button("🆕 New Invoice", use_container_width=True):
+                 cb_reset_transaction()
+                 st.rerun()
 
 def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> None:
     try:
@@ -1231,15 +1408,13 @@ def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> No
             "title": st.session_state.get("inv_title", ""),
             "date": datetime.now().strftime("%d %B %Y"),
             "client_name": st.session_state.get("inv_client_name", ""),
+            "client_phone": st.session_state.get("inv_client_phone", ""),
             "client_email": client_email,
             "wedding_date": (st.session_state.get("inv_wedding_date") or date.today()).strftime("%d %B %Y"),
             "venue": st.session_state.get("inv_venue", ""),
             "subtotal": 0,
             "cashback": safe_float(st.session_state.get("inv_cashback", 0)),
-            "pay_dp1": safe_int(st.session_state.get("pay_dp1", 0)),
-            "pay_term2": safe_int(st.session_state.get("pay_term2", 0)),
-            "pay_term3": safe_int(st.session_state.get("pay_term3", 0)),
-            "pay_full": safe_int(st.session_state.get("pay_full", 0)),
+            "payment_terms": st.session_state.get("payment_terms", []),
             "terms": st.session_state.get("inv_terms", ""),
             "bank_name": st.session_state.get("bank_nm", ""),
             "bank_acc": st.session_state.get("bank_ac", ""),
@@ -1273,11 +1448,6 @@ def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> No
             st.toast("Updated! Redirecting to History...", icon="✅")
             st.session_state["editing_invoice_id"] = None
             
-            # Redirect to History View
-            st.session_state["menu_selection"] = "📜 Invoice History"
-            if "nav_key" in st.session_state:
-                st.session_state["nav_key"] += 1
-            
         else:
             db.save_invoice(
                 inv_no, 
@@ -1286,13 +1456,13 @@ def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> No
                 grand, 
                 json.dumps(payload)
             )
-            st.toast("Invoice saved! Resetting form...", icon="💾")
-            # Reset form for next input
-            cb_reset_transaction()
+            st.toast("Invoice saved! Redirecting to History...", icon="💾")
         
-        # Delay to show toast
-        import time
-        time.sleep(1.0)
+        # Reset form and set redirect flag (will be handled outside callback)
+        cb_reset_transaction()
+        st.session_state["menu_selection"] = "📜 Invoice History"
+        st.session_state["nav_key"] = st.session_state.get("nav_key", 0) + 1
+        st.session_state["_redirect_to_history"] = True
             
     except Exception as e:
         st.error(f"Failed to save/update history: {e}")
@@ -1305,6 +1475,16 @@ def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> No
 def render_page() -> None:
     initialize_session_state()
     inject_styles()
+    
+    # Handle redirect after save/update (callback can't call rerun)
+    if st.session_state.get("_redirect_to_history"):
+        st.session_state["_redirect_to_history"] = False
+        st.rerun()
+    
+    # Handle rerun after reset (to close popover)
+    if st.session_state.get("_needs_rerun"):
+        st.session_state["_needs_rerun"] = False
+        st.rerun()
 
     page_header("🧾 Event Invoice Builder", "Manage sales, split payments, and generate invoices.")
 
