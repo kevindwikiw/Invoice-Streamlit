@@ -112,6 +112,116 @@ def get_invoice_css() -> str:
     div[data-testid="stNumberInput"] {{ min-width:0!important; width:100%!important; }}
     div[data-testid="stNumberInput"] input {{ height:2.1rem!important; text-align:center; font-weight:800; padding:0 .25rem!important; }}
     div[data-testid="stButton"] button {{ padding:.28rem .55rem; min-height:0; }}
+
+    /* --- PACKAGE MINI CARD (packages_view) --- */
+    .mini-card {{
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 16px;
+        position: relative;
+        transition: all 0.2s ease;
+        height: 100%;
+    }}
+    .mini-card:hover {{
+        border-color: #cbd5e1;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+        transform: translateY(-2px);
+    }}
+    .card-topbar {{
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+    }}
+    .mini-title {{
+        font-weight: 900;
+        font-size: 0.95rem;
+        color: #111827;
+        line-height: 1.3;
+        margin-bottom: 4px;
+    }}
+    .mini-price {{
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-weight: 900;
+        font-size: 1.05rem;
+        color: #2563eb;
+        margin-bottom: 10px;
+    }}
+    .mini-body {{
+        font-size: 0.82rem;
+        color: #6b7280;
+        line-height: 1.5;
+        min-height: 60px;
+    }}
+    .mini-muted {{
+        color: #9ca3af;
+        font-size: 0.8rem;
+        font-style: italic;
+    }}
+    .badge {{
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }}
+    .badge-main {{
+        background: #dbeafe;
+        color: #1e40af;
+    }}
+    .badge-addon {{
+        background: #fef3c7;
+        color: #92400e;
+    }}
+    .desc-clamp {{
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }}
+    .desc-more {{
+        color: #3b82f6;
+        font-size: 0.75rem;
+        font-weight: 600;
+        margin-top: 4px;
+        cursor: default;
+    }}
+    .desc-tooltip {{
+        display: none;
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 100%;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 12px;
+        box-shadow: 0 12px 28px rgba(0,0,0,0.12);
+        z-index: 30;
+        margin-bottom: 8px;
+        font-size: 0.8rem;
+        color: #374151;
+    }}
+    .mini-card:hover .desc-tooltip {{
+        display: block;
+    }}
+    .desc-tooltip-title {{
+        font-weight: 800;
+        font-size: 0.75rem;
+        color: #111827;
+        margin-bottom: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }}
+    .desc-tooltip-line {{
+        margin-bottom: 2px;
+    }}
+    .card-actions-gap {{
+        height: 8px;
+    }}
     </style>
     """
 
