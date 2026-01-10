@@ -50,7 +50,7 @@ CASHBACK_STEP = 500_000
 PAYMENT_STEP = 1_000_000
 BUNDLE_PRICE_STEP = 500_000
 
-DEFAULT_INVOICE_TITLE = "Exhibition Package 2026"
+DEFAULT_INVOICE_TITLE = ""
 DEFAULT_TERMS = (
     "Down Payment sebesar Rp 500.000 (Lima Ratus Ribu Rupiah) saat di booth pameran\n"
     "Termin pembayaran H+7 Pameran: Rp 500.000, H-7 prewedding: Rp 3.000.000, dan pelunasan H-7 wedding\n"
@@ -218,6 +218,51 @@ def cleanup_all_bundle_price_keys() -> None:
 
 
 
+# --- Invoice Number Generator ---
+
+def _sanitize_client_name(name: str) -> str:
+    """Extract clean uppercase identifier from client name."""
+    import re
+    # Remove special chars, keep only letters/numbers
+    clean = re.sub(r'[^a-zA-Z0-9]', '', name)
+    # Take first 12 chars uppercase
+    return clean[:12].upper() if clean else ""
+
+def generate_invoice_no() -> str:
+    """Generate invoice number based on client name with DB-backed sequence."""
+    client_name = st.session_state.get("inv_client_name", "").strip()
+    
+    if not client_name:
+        # Fallback to date-based
+        prefix = datetime.now().strftime('%Y%m%d')
+    else:
+        prefix = _sanitize_client_name(client_name)
+        if not prefix:
+            prefix = datetime.now().strftime('%Y%m%d')
+    
+    # Get next sequence from DB (atomic increment)
+    seq = db.get_next_invoice_seq(prefix)
+    
+    return f"INV-{prefix}-{seq:03d}"
+
+def cb_update_invoice_no() -> None:
+    """Callback to auto-generate invoice number when client name changes."""
+    # Only auto-generate if not editing existing invoice
+    if st.session_state.get("editing_invoice_id"):
+        # For edits, increment revision
+        current = st.session_state.get("inv_no", "")
+        if current:
+            import re
+            match = re.match(r'(.*-)([0-9]+)$', current)
+            if match:
+                base, num = match.groups()
+                st.session_state["inv_no"] = f"{base}{int(num)+1:03d}"
+                invalidate_pdf()
+                return
+    
+    # New invoice: generate fresh
+    st.session_state["inv_no"] = generate_invoice_no()
+    invalidate_pdf()
 
 # --- Callbacks ---
 
@@ -343,6 +388,18 @@ def cb_reset_transaction() -> None:
     st.session_state["inv_items"] = []
     st.session_state["inv_cashback"] = 0
     st.session_state["generated_pdf_bytes"] = None
+    st.session_state["pp_cached"] = []  # Clear Payment Proofs
+    
+    # Clear Metadata
+    db_conf = load_db_settings()
+    st.session_state["inv_title"] = db_conf["title"]
+    st.session_state["inv_client_name"] = ""
+    st.session_state["inv_client_email"] = ""
+    st.session_state["inv_venue"] = ""
+    st.session_state["inv_wedding_date"] = date.today() + timedelta(days=90)
+    # Default Invoice No (Auto-gen for next ID usually better, here simplistic)
+    st.session_state["inv_no"] = f"INV/{datetime.now().strftime('%m')}/2026"
+    
     st.session_state["pay_dp1"] = 0
     st.session_state["pay_term2"] = 0
     st.session_state["pay_term3"] = 0
@@ -350,7 +407,14 @@ def cb_reset_transaction() -> None:
     st.session_state["editing_invoice_id"] = None  # Clear edit mode
     cleanup_all_qty_keys()
     cleanup_all_bundle_price_keys()
-    st.toast("Transaction cleared.", icon="🧹")
+    
+    # Reset file uploader widget by changing its key
+    st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
+    
+    # Force scroll to top by incrementing nav_key
+    st.session_state["nav_key"] = st.session_state.get("nav_key", 0) + 1
+    
+    st.toast("Form reset! Starting fresh.", icon="🆕")
 
 # --- Bundling callbacks ---
 
@@ -510,18 +574,18 @@ def render_event_metadata() -> None:
         unsafe_allow_html=True
     )
     
-    # Event Row
-    c1, c2, c3 = st.columns([1, 0.8, 1])
+    # Event Row - symmetric columns
+    c1, c2, c3 = st.columns([1, 1, 1])
     c1.text_input("Invoice No", key="inv_no", on_change=invalidate_pdf)
     c2.date_input("Wedding Date", key="inv_wedding_date", on_change=invalidate_pdf)
     c3.text_input("Venue", key="inv_venue", placeholder="Hotel/Gedung", on_change=invalidate_pdf)
     
     st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
     
-    # Client Row
-    c4, c5, c6 = st.columns([1.2, 1, 1])
-    c4.text_input("Event / Title", key="inv_title", on_change=invalidate_pdf)
-    c5.text_input("Client Name", key="inv_client_name", placeholder="CPW & CPP", on_change=invalidate_pdf)
+    # Client Row - symmetric columns
+    c4, c5, c6 = st.columns([1, 1, 1])
+    c4.text_input("Event / Title", key="inv_title", placeholder="e.g. Wedding Reception 2026", on_change=invalidate_pdf)
+    c5.text_input("Client Name", key="inv_client_name", placeholder="CPW & CPP", on_change=cb_update_invoice_no)
     c6.text_input("Email", key="inv_client_email", placeholder="client@email.com", on_change=invalidate_pdf)
     
     st.markdown("</div>", unsafe_allow_html=True) # End Card 1
@@ -587,12 +651,32 @@ def render_payment_section(grand_total: float) -> None:
         unsafe_allow_html=True,
     )
 
-    # Input Grid
+    # Input Grid with formatted captions
     row1, row2, row3, row4 = st.columns(4)
-    row1.number_input("DP 1", step=PAYMENT_STEP, key="pay_dp1", on_change=invalidate_pdf)
-    row2.number_input("Term 2", step=PAYMENT_STEP, key="pay_term2", on_change=invalidate_pdf)
-    row3.number_input("Term 3", step=PAYMENT_STEP, key="pay_term3", on_change=invalidate_pdf)
-    row4.number_input("Pelunasan", step=PAYMENT_STEP, key="pay_full", on_change=invalidate_pdf)
+    
+    with row1:
+        st.number_input("DP 1", step=PAYMENT_STEP, key="pay_dp1", on_change=invalidate_pdf)
+        dp1_val = safe_int(st.session_state.get("pay_dp1", 0))
+        if dp1_val > 0:
+            st.caption(f"Rp {dp1_val:,}".replace(",", "."))
+    
+    with row2:
+        st.number_input("Term 2", step=PAYMENT_STEP, key="pay_term2", on_change=invalidate_pdf)
+        t2_val = safe_int(st.session_state.get("pay_term2", 0))
+        if t2_val > 0:
+            st.caption(f"Rp {t2_val:,}".replace(",", "."))
+    
+    with row3:
+        st.number_input("Term 3", step=PAYMENT_STEP, key="pay_term3", on_change=invalidate_pdf)
+        t3_val = safe_int(st.session_state.get("pay_term3", 0))
+        if t3_val > 0:
+            st.caption(f"Rp {t3_val:,}".replace(",", "."))
+    
+    with row4:
+        st.number_input("Pelunasan", step=PAYMENT_STEP, key="pay_full", on_change=invalidate_pdf)
+        full_val = safe_int(st.session_state.get("pay_full", 0))
+        if full_val > 0:
+            st.caption(f"Rp {full_val:,}".replace(",", "."))
 
     # Buttons
     st.write("")
@@ -628,24 +712,70 @@ def render_payment_section(grand_total: float) -> None:
     
     pp_col1, pp_col2 = st.columns([3, 1])
     with pp_col1:
-        pp_file = st.file_uploader("Upload Image (JPG/PNG)", type=["jpg", "png", "jpeg"], key="pp_uploader", label_visibility="collapsed")
+        # Dynamic key ensures uploader resets when form is reset
+        uploader_key = f"pp_uploader_{st.session_state.get('uploader_key', 0)}"
+        pp_files = st.file_uploader(
+            "Upload Images (Max 5MB each)", 
+            type=["jpg", "png", "jpeg"], 
+            key=uploader_key, 
+            accept_multiple_files=True,
+            label_visibility="collapsed"
+        )
     
-    if pp_file:
-        st.session_state["pp_cached"] = _image_to_base64(pp_file)
+    if pp_files:
+        # Check if list exists
+        current_proofs = st.session_state.get("pp_cached", [])
+        if not isinstance(current_proofs, list):
+             current_proofs = []
+             
+        new_added = False
+        for f in pp_files:
+            # Basic Error Handling: Size Limit (5MB)
+            if f.size > 5 * 1024 * 1024:
+                st.error(f"❌ '{f.name}' is too large (>5MB). Skipped.")
+                continue
+                
+            try:
+                # Convert to base64
+                b64 = _image_to_base64(f)
+                # Avoid duplicates (basic check)
+                if b64 not in current_proofs:
+                    current_proofs.append(b64)
+                    new_added = True
+            except Exception as e:
+                st.error(f"Error processing '{f.name}': {e}")
+                
+        if new_added:
+            st.session_state["pp_cached"] = current_proofs
         
     with pp_col2:
-        if st.session_state.get("pp_cached"):
-            st.success("Ready!")
-            if st.button("❌ Remove", key="rm_proof", use_container_width=True):
-                del st.session_state["pp_cached"]
-                st.rerun()
+        cached = st.session_state.get("pp_cached")
+        if cached:
+            if isinstance(cached, list):
+                cnt = len(cached)
+                st.success(f"{cnt} Files Ready!")
+            else:
+                st.success("1 File Ready!")
+                
+            # Clear All Callback - also reset uploader widget
+            def _cb_clear_proof():
+                st.session_state["pp_cached"] = []
+                st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
+                
+            if st.button("❌ Clear All", key="rm_proof", type="secondary", use_container_width=True, on_click=_cb_clear_proof):
+                pass
     
     st.markdown("</div>", unsafe_allow_html=True) # End Card 3
 
     # --- PROCESS ACTIONS ---
     st.write("")
     act_col1, act_col2 = st.columns([1, 2], vertical_alignment="bottom")
-    act_col1.button("Reset All", on_click=cb_reset_transaction, use_container_width=True)
+    
+    # 1. Reset Confirmation Popover
+    with act_col1.popover("Reset All", use_container_width=True):
+        st.write("Are you sure?")
+        if st.button("Yes, Reset!", type="primary", use_container_width=True, on_click=cb_reset_transaction):
+            pass # changes happen in callback
 
     # Re-calculate checks for button state
     # We need subtotal/grand_total but they are passed to parent. 
@@ -662,11 +792,50 @@ def render_payment_section(grand_total: float) -> None:
     # For now, re-calculating is safe and cheap.
     current_sub, _ = calculate_totals(items, safe_float(st.session_state.get("inv_cashback", 0)))
 
-    if act_col2.button(btn_label, type="primary", use_container_width=True, disabled=not is_valid_order):
-        if already_ready:
-            st.toast("PDF already generated.", icon="✅")
-        else:
+    # Check if PDF already generated
+    pdf_bytes = st.session_state.get("generated_pdf_bytes")
+    
+    if pdf_bytes:
+        # --- PDF Ready: Show all action options ---
+        st.success("✅ PDF Generated!")
+        
+        inv_no = st.session_state.get("inv_no", "invoice").replace("/", "_")
+        client_email = (st.session_state.get("inv_client_email") or "").strip()
+        
+        # Row 1: Download + Re-process
+        dl_col, re_col = st.columns(2)
+        with dl_col:
+            st.download_button(
+                "📥 Download PDF",
+                data=pdf_bytes,
+                file_name=f"{inv_no}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary"
+            )
+        with re_col:
+            if st.button("🔄 Re-process PDF", use_container_width=True, disabled=not is_valid_order):
+                invalidate_pdf()  # Clear current PDF
+                generate_pdf_wrapper(current_sub, grand_total)
+                st.rerun()
+        
+        # Row 2: Save to History + Start New
+        save_col, new_col = st.columns(2)
+        
+        edit_id = st.session_state.get("editing_invoice_id")
+        save_label = f"💾 Update (#{edit_id})" if edit_id else "💾 Save to History"
+        
+        with save_col:
+            if st.button(save_label, use_container_width=True, on_click=_handle_save_history, args=(inv_no, client_email, pdf_bytes)):
+                pass
+        with new_col:
+            if st.button("🆕 New Invoice", use_container_width=True, on_click=cb_reset_transaction):
+                pass
+    else:
+        # --- No PDF yet: Show Process button ---
+        if act_col2.button("🚀 Process Invoice & PDF", type="primary", use_container_width=True, disabled=not is_valid_order):
             generate_pdf_wrapper(current_sub, grand_total)
+            st.rerun()
 
 def _filter_and_sort_packages(packages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cat_filter = st.session_state.get("cat_filter", "All")
@@ -883,10 +1052,19 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
             col1, col2, col3, col4 = st.columns(POS_COLUMN_RATIOS, gap="small", vertical_alignment="center")
 
             with col1:
+                desc = sanitize_text(item.get('Description', ''))
+                details = item.get('Details', '')
                 st.markdown(
-                    f"<div class='it'>{sanitize_text(item.get('Description', ''))}</div>",
+                    f"<div class='it'>{desc}</div>",
                     unsafe_allow_html=True,
                 )
+                # Show compact details if available
+                if details:
+                    details_preview = sanitize_text(details[:80]) + ('...' if len(details) > 80 else '')
+                    st.markdown(
+                        f"<div class='meta' style='margin-top:2px;'>{details_preview}</div>",
+                        unsafe_allow_html=True,
+                    )
                 if is_bundle:
                     st.markdown("<div class='iso-badg badg-blue' style='margin-top:4px;'>BUNDLE</div>", unsafe_allow_html=True)
                     # Optional: Show bundle price input if mode is custom? 
@@ -974,7 +1152,7 @@ def generate_pdf_wrapper(subtotal: float, grand_total: float) -> None:
             "bank_name": st.session_state.get("bank_nm", ""),
             "bank_acc": st.session_state.get("bank_ac", ""),
             "bank_holder": st.session_state.get("bank_an", ""),
-            "payment_proof": st.session_state.get("pp_cached", "")
+            "payment_proof": st.session_state.get("pp_cached") or []
         }
 
         with st.spinner("Generating PDF..."):
@@ -1040,8 +1218,8 @@ def render_download_section() -> None:
         edit_id = st.session_state.get("editing_invoice_id")
         btn_label = f"💾 Update History (#{edit_id})" if edit_id else "💾 Save to History"
         
-        if st.button(btn_label, use_container_width=True):
-             _handle_save_history(inv_no, email_recipient, pdf_bytes)
+        if st.button(btn_label, use_container_width=True, on_click=_handle_save_history, args=(inv_no, email_recipient, pdf_bytes)):
+             pass # Logic moved to callback
 
 def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> None:
     try:
@@ -1066,7 +1244,7 @@ def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> No
             "bank_name": st.session_state.get("bank_nm", ""),
             "bank_acc": st.session_state.get("bank_ac", ""),
             "bank_holder": st.session_state.get("bank_an", ""),
-            "payment_proof": st.session_state.get("pp_cached", "")
+            "payment_proof": st.session_state.get("pp_cached") or []
         }
         
         # Recalc Totals for DB
@@ -1112,10 +1290,9 @@ def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> No
             # Reset form for next input
             cb_reset_transaction()
         
-        # Delay to show toast, then refresh/redirect
+        # Delay to show toast
         import time
         time.sleep(1.0)
-        st.rerun()
             
     except Exception as e:
         st.error(f"Failed to save/update history: {e}")
@@ -1129,7 +1306,7 @@ def render_page() -> None:
     initialize_session_state()
     inject_styles()
 
-    page_header("Event Invoice Builder", "Manage sales, split payments, and generate invoices.")
+    page_header("🧾 Event Invoice Builder", "Manage sales, split payments, and generate invoices.")
 
     # Fetch catalog (cached)
     try:
@@ -1146,15 +1323,22 @@ def render_page() -> None:
     render_event_metadata()
     st.write("")
 
-    left_col, right_col = st.columns([1.7, 1], gap="large")
-    with left_col:
-        render_catalog_section(packages)
-    with right_col:
+    # Layout: Catalog Top (Full), Bottom Split (Bill | Payment)
+    
+    # 1. Catalog (Full Width)
+    render_catalog_section(packages)
+    
+    st.write("")
+    st.divider()
+    st.write("")
+    
+    # 2. Split: Bill (Left) | Payment (Right)
+    bot_left, bot_right = st.columns([1.7, 1], gap="large")
+    
+    with bot_left:
+        # Bill / POS Section
         render_pos_section(subtotal, safe_float(st.session_state.get("inv_cashback", 0)), grand_total)
         
-        # Payment Schedule now sits below POS card
-        st.write("")
+    with bot_right:
+        # Payment Schedule & Actions
         render_payment_section(grand_total)
-        
-        # Final Actions
-        render_download_section()
