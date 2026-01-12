@@ -86,10 +86,15 @@ def is_valid_email(email: str) -> bool:
         return False
     return True
 
+import re
+
 def make_safe_filename(inv_no: str, prefix: str = "INV") -> str:
     inv_no = (inv_no or prefix).strip()
-    safe_name = inv_no.replace("/", "_").replace("\\", "_").strip()
-    return safe_name or "invoice"
+    # Replace common separators with underscore
+    s = inv_no.replace("/", "_").replace("\\", "_").replace(" ", "_")
+    # Remove all non-alphanumeric except _ and -
+    s = re.sub(r'[^a-zA-Z0-9_\-]', '', s)
+    return s.strip() or "invoice"
 
 def image_to_base64(uploaded_file) -> str:
     """Converts uploaded file to optimized base64 string (JPEG, resized)."""
