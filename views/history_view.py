@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 from modules import db, invoice as invoice_mod
+from modules.utils import make_safe_filename
 from ui.components import page_header
 from ui.formatters import rupiah
 from views.styles import inject_styles
@@ -30,6 +31,13 @@ def _get_invoice_pdf(invoice_id: int) -> Optional[bytes]:
         return pdf_bytes
     except Exception:
         return None
+
+@st.dialog("📤 Kirim via WhatsApp")
+def open_wa_dialog(wa_url: str):
+    st.warning("⚠️ **PENTING**: File PDF **TIDAK** otomatis terkirim.")
+    st.write("Silakan klik tombol di bawah untuk membuka chat, lalu **lampirkan file PDF** yang sudah Anda download secara manual.")
+    st.write("")
+    st.link_button("🚀 Lanjut ke WhatsApp", wa_url, use_container_width=True)
 
 
 def render_page():
@@ -82,7 +90,7 @@ def render_page():
     # --- Invoice Table ---
     st.markdown(
         """
-        <div style="display:grid; grid-template-columns: 2fr 2fr 1.5fr 1fr 1.2fr; gap:8px; padding:10px 12px; 
+        <div style="display:grid; grid-template-columns: 2fr 2fr 1.5fr 1fr 1.6fr; gap:8px; padding:10px 12px; 
                     background:#f1f5f9; border-radius:6px; font-size:0.72rem; font-weight:700; 
                     color:#64748b; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;">
             <div>Invoice No</div>
@@ -105,7 +113,7 @@ def render_page():
 
         # Row container
         with st.container():
-            c1, c2, c3, c4, c5 = st.columns([2, 2, 1.5, 1, 1.2], vertical_alignment="center")
+            c1, c2, c3, c4, c5 = st.columns([2, 2, 1.5, 1, 1.6], vertical_alignment="center")
             
             with c1:
                 proof_icon = " 📎" if has_proof else ""
@@ -121,7 +129,7 @@ def render_page():
                 st.markdown(f"<div style='text-align:right; font-weight:700; color:#0f172a;'>{rupiah(total)}</div>", unsafe_allow_html=True)
             
             with c5:
-                btn1, btn2, btn3 = st.columns(3)
+                btn1, btn2, btn3, btn4 = st.columns(4)
                 with btn1:
                     if st.button("✏️", key=f"ed_{inv_id}", help="Edit"):
                         _handle_edit(inv_id)
@@ -132,7 +140,7 @@ def render_page():
                         st.download_button(
                             "📥", 
                             data=pdf_data, 
-                            file_name=f"{inv_no.replace('/', '_')}.pdf",
+                            file_name=f"{make_safe_filename(inv_no)}.pdf",
                             mime="application/pdf",
                             key=f"dl_{inv_id}",
                             help="Download PDF"
@@ -140,6 +148,43 @@ def render_page():
                     else:
                         st.button("📥", key=f"dl_err_{inv_id}", disabled=True, help="PDF Error")
                 with btn3:
+                     # WhatsApp Share
+                     phone_raw = inv.get("client_phone")
+                     if phone_raw:
+                         # Sanitize
+                         import re
+                         safe_phone = re.sub(r"[^0-9]", "", str(phone_raw))
+                         if safe_phone.startswith("0"): safe_phone = "62" + safe_phone[1:]
+                         
+                         # Get Template
+                         default_tpl = """Halo Kak {nama}!
+
+Terima kasih sudah mempercayakan momen spesial Anda kepada kami.
+
+Berikut detail invoice Anda:
+Invoice: {inv_no}
+
+Silakan cek file invoice yang sudah kami kirimkan ya. Jika ada pertanyaan, jangan ragu untuk menghubungi kami.
+
+Warm regards,
+ORBIT Team"""
+                         tpl = db.get_config("wa_template_default") or default_tpl
+                         msg = tpl.replace("{nama}", client).replace("{inv_no}", inv_no)
+                         
+                         import urllib.parse
+                         encoded_msg = urllib.parse.quote(msg)
+                         
+                         if safe_phone:
+                             wa_url = f"https://wa.me/{safe_phone}?text={encoded_msg}"
+                         else:
+                             wa_url = f"https://api.whatsapp.com/send?text={encoded_msg}"
+                             
+                         if st.button("📱", key=f"wa_{inv_id}", help="Share WhatsApp"):
+                             open_wa_dialog(wa_url)
+                     else:
+                         st.button("📱", key=f"wa_dis_{inv_id}", disabled=True, help="No Phone Found")
+
+                with btn4:
                     if st.button("🗑️", key=f"del_{inv_id}", help="Delete"):
                         st.session_state[f"confirm_del_{inv_id}"] = True
 
@@ -249,11 +294,11 @@ def _handle_reprint(invoice_id: int):
         pdf_bytes = invoice_mod.generate_pdf_bytes(meta, items, grand_total)
         
         if pdf_bytes:
-            inv_no = meta.get("inv_no", "invoice").replace("/", "_")
+            inv_no_safe = make_safe_filename(meta.get("inv_no", "invoice"))
             st.download_button(
-                label=f"📥 Download {inv_no}.pdf",
+                label=f"📥 Download {inv_no_safe}.pdf",
                 data=pdf_bytes,
-                file_name=f"{inv_no}.pdf",
+                file_name=f"{inv_no_safe}.pdf",
                 mime="application/pdf",
                 key=f"dl_{invoice_id}"
             )
