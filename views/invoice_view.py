@@ -610,7 +610,7 @@ def render_event_metadata() -> None:
     if "_config_exp_key" not in st.session_state:
         st.session_state["_config_exp_key"] = 0
         
-    with st.expander("🏦 Bank, Terms, WhatsApp Config, & Footer", expanded=False, key=f"cfg_exp_{st.session_state['_config_exp_key']}"):
+    with st.expander("🏦 Bank, Terms, WhatsApp Config, & Footer", expanded=False):
         tab_bank, tab_terms, tab_wa, tab_footer = st.tabs(["🏦 Bank Data", "📜 Terms", "📱 WhatsApp", "📝 Footer"])
         
         with tab_bank:
