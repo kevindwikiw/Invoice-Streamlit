@@ -164,9 +164,14 @@ def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount:
 def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
     """Fetches recent invoices list (metadata only)."""
     # We fetch LENGTH(invoice_data) to guess if an image is attached (heuristically > 10KB)
-    query = "SELECT id, invoice_no, client_name, date, total_amount, created_at, LENGTH(invoice_data) as data_size FROM invoices ORDER BY id DESC LIMIT %s"
-    
     if USE_POSTGRES:
+        # Postgres JSON extraction
+        query = """
+            SELECT id, invoice_no, client_name, date, total_amount, created_at, 
+                   LENGTH(invoice_data) as data_size,
+                   invoice_data::json->'meta'->>'client_phone' as client_phone
+            FROM invoices ORDER BY id DESC LIMIT %s
+        """
         try:
             with get_pg_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as c:
@@ -176,11 +181,18 @@ def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
             print(f"[DB ERROR] get_invoices failed: {e}")
             return []
     else:
+        # SQLite JSON extraction
+        query = """
+            SELECT id, invoice_no, client_name, date, total_amount, created_at, 
+                   LENGTH(invoice_data) as data_size,
+                   json_extract(invoice_data, '$.meta.client_phone') as client_phone
+            FROM invoices ORDER BY id DESC LIMIT ?
+        """
         try:
             with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
                 conn.row_factory = sqlite3.Row
                 c = conn.cursor()
-                c.execute(query.replace("%s", "?"), (limit,))
+                c.execute(query, (limit,))
                 return [dict(row) for row in c.fetchall()]
         except Exception as e:
             print(f"[DB ERROR] get_invoices failed: {e}")
