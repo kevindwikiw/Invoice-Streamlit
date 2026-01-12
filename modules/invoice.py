@@ -113,6 +113,15 @@ def _draw_footer_contact(c, W):
     c.setFillColor(colors.HexColor("#1a1a1a"))
     c.rect(0, 0, W, bar_h, fill=1, stroke=0)
     
+    # 2. Define Data items as SINGLE STRINGS
+    # User Request: "testing jadi 1 baris aja gausah dipisah... itu yg bikin error"
+    # Merging icon and text into one string guarantees they are on the same baseline.
+    
+def _draw_footer_contact(c, W, items=None):
+    bar_h = 10 * mm
+    c.setFillColor(colors.HexColor("#1a1a1a"))
+    c.rect(0, 0, W, bar_h, fill=1, stroke=0)
+    
     # 1. Font Setup
     emoji_font = "Helvetica"
     try:
@@ -120,16 +129,15 @@ def _draw_footer_contact(c, W):
         emoji_font = 'SegoeEmoji'
     except:
         pass
-        
-    # 2. Define Data items as SINGLE STRINGS
-    # User Request: "testing jadi 1 baris aja gausah dipisah... itu yg bikin error"
-    # Merging icon and text into one string guarantees they are on the same baseline.
-    items = [
-        "📍 Jl. Panembakan Gg Sukamaju 15 No. 3, Kota Cimahi",
-        "📧 theorbitphoto@gmail.com",
-        "📸 @theorbitphoto",
-        "📞 0813-2333-1506"
-    ]
+
+    if not items:
+        # Default fallback
+        items = [
+            "📍 Jl. Panembakan Gg Sukamaju 15 No. 3, Kota Cimahi",
+            "📧 theorbitphoto@gmail.com",
+            "📸 @theorbitphoto",
+            "📞 0813-2333-1506"
+        ]
     
     # 3. Font Setup
     # Must use a font that supports BOTH Emoji and Text for the single string.
@@ -204,27 +212,9 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     ribbon_drop = 15 * mm
 
     # --- Extract Data ---
-    # Indonesian day names
-    hari_id = {
-        0: 'Senin',    # Monday
-        1: 'Selasa',   # Tuesday
-        2: 'Rabu',     # Wednesday
-        3: 'Kamis',    # Thursday
-        4: 'Jumat',    # Friday
-        5: 'Sabtu',    # Saturday
-        6: 'Minggu'    # Sunday
-    }
-    
-    # Indonesian month names
-    bulan_id = {
-        1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April',
-        5: 'Mei', 6: 'Juni', 7: 'Juli', 8: 'Agustus',
-        9: 'September', 10: 'Oktober', 11: 'November', 12: 'Desember'
-    }
-    
-    # Use today's date (ignore meta["date"] to avoid parsing issues)
+    # English date format: "Sunday, 12 January 2026"
     dt = datetime.today()
-    date_str = f"{hari_id[dt.weekday()]}, {dt.day} {bulan_id[dt.month]} {dt.year}"
+    date_str = dt.strftime("%A, %d %B %Y")
     
     inv_no = _safe_str(meta.get("inv_no", "0000"))
     title = _safe_str(meta.get("title", ""))
@@ -386,7 +376,7 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
         ("BACKGROUND", (0, 0), (-1, 0), BLACK),
         ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
         ("GRID", (0, 0), (-1, -1), 0.5, LINE_COLOR), 
-        ("VALIGN", (0, 1), (-1, -1), "TOP"),
+        ("VALIGN", (0, 1), (-1, -1), "MIDDLE"),
         ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
         ("FONTSIZE", (0, 1), (-1, -1), 8),
         ("ALIGN", (0, 1), (0, -1), "CENTER"), 
@@ -610,7 +600,8 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     # =========================================================
     # 6. FOOTER BAR (BLACK)
     # =========================================================
-    _draw_footer_contact(c, W)
+    footer_items = meta.get("footer_info")
+    _draw_footer_contact(c, W, items=footer_items)
 
     # =========================================================
     # 7. PAGE 2: PAYMENT PROOF (Flexible Height)
@@ -706,7 +697,7 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
                     c.drawImage(img, margin, img_y, width=draw_w, height=draw_h, mask="auto")
                     
                     # --- FOOTER (matching main invoice) ---
-                    _draw_footer_contact(c, W)
+                    _draw_footer_contact(c, W, items=footer_items)
                 else:
                     # corrupted item
                     c.setPageSize(A4)
