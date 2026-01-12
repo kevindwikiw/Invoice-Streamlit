@@ -62,7 +62,14 @@ DEFAULT_BANK_INFO = {
     "bank_nm": "OCBC",
     "bank_ac": "693810505794",
     "bank_an": "FANI PUSPITA NINGRUM",
+    "bank_an": "FANI PUSPITA NINGRUM",
 }
+DEFAULT_FOOTER_ITEMS = (
+    "📍 Jl. Panembakan Gg Sukamaju 15 No. 3, Kota Cimahi\n"
+    "📧 theorbitphoto@gmail.com\n"
+    "📸 @theorbitphoto\n"
+    "📞 0813-2333-1506"
+)
 
 # --- DB Persistence Helper ---
 def load_db_settings() -> Dict[str, Any]:
@@ -71,18 +78,12 @@ def load_db_settings() -> Dict[str, Any]:
         "terms": db.get_config("inv_terms_default", DEFAULT_TERMS),
         "bank_nm": db.get_config("bank_nm_default", DEFAULT_BANK_INFO["bank_nm"]),
         "bank_ac": db.get_config("bank_ac_default", DEFAULT_BANK_INFO["bank_ac"]),
-        "bank_an": db.get_config("bank_an_default", DEFAULT_BANK_INFO["bank_an"]),
-    }
-
-# --- DB Persistence Helper ---
-def load_db_settings() -> Dict[str, Any]:
-    return {
-        "title": db.get_config("inv_title_default", DEFAULT_INVOICE_TITLE),
-        "terms": db.get_config("inv_terms_default", DEFAULT_TERMS),
-        "bank_nm": db.get_config("bank_nm_default", DEFAULT_BANK_INFO["bank_nm"]),
         "bank_ac": db.get_config("bank_ac_default", DEFAULT_BANK_INFO["bank_ac"]),
         "bank_an": db.get_config("bank_an_default", DEFAULT_BANK_INFO["bank_an"]),
+        "inv_footer": db.get_config("inv_footer_default", DEFAULT_FOOTER_ITEMS),
     }
+
+
 
 CATALOG_CACHE_TTL_SEC = 300  # 5 min, safe default
 
@@ -169,7 +170,9 @@ def initialize_session_state() -> None:
         "inv_terms": db_conf["terms"],
         "bank_nm": db_conf["bank_nm"],
         "bank_ac": db_conf["bank_ac"],
+        "bank_ac": db_conf["bank_ac"],
         "bank_an": db_conf["bank_an"],
+        "inv_footer": db_conf["inv_footer"],
 
         # UI Filters
         "cat_filter": "All",
@@ -395,6 +398,14 @@ def cb_reset_transaction() -> None:
     # Clear Metadata
     db_conf = load_db_settings()
     st.session_state["inv_title"] = db_conf["title"]
+    
+    # Reload Configs (in case user saved new defaults)
+    st.session_state["inv_terms"] = db_conf["terms"]
+    st.session_state["bank_nm"] = db_conf["bank_nm"]
+    st.session_state["bank_ac"] = db_conf["bank_ac"]
+    st.session_state["bank_an"] = db_conf["bank_an"]
+    st.session_state["inv_footer"] = db_conf["inv_footer"]
+
     st.session_state["inv_client_name"] = ""
     st.session_state["inv_client_phone"] = ""
     st.session_state["inv_client_email"] = ""
@@ -587,42 +598,57 @@ def render_event_metadata() -> None:
     st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
     
     # Client Row - with phone for WhatsApp
-    c4, c5, c6, c7 = st.columns([1.2, 1, 1, 1])
+    c4, c5, c6 = st.columns([1, 1, 1])
     c4.text_input("Event / Title", key="inv_title", placeholder="e.g. Wedding Reception 2026", on_change=invalidate_pdf)
     c5.text_input("Client Name", key="inv_client_name", placeholder="CPW & CPP", on_change=invalidate_pdf)
     c6.text_input("Client WhatsApp", key="inv_client_phone", placeholder="6281234567890", on_change=invalidate_pdf)
-    c7.text_input("Email", key="inv_client_email", placeholder="client@email.com", on_change=invalidate_pdf)
     
     st.markdown("</div>", unsafe_allow_html=True) # End Card 1
 
     # Banking & WhatsApp Config (Collapsible)
-    with st.expander("🏦 Bank, Terms & WhatsApp Config"):
-        b_col1, b_col2, b_col3 = st.columns(3)
-        b_col1.text_input("Bank Name", key="bank_nm", on_change=invalidate_pdf)
-        b_col2.text_input("Account No", key="bank_ac", on_change=invalidate_pdf)
-        b_col3.text_input("Account Holder", key="bank_an", on_change=invalidate_pdf)
+    # Trick: Use a dynamic key to force reset (collapse) after save
+    if "_config_exp_key" not in st.session_state:
+        st.session_state["_config_exp_key"] = 0
         
-        st.text_area("Terms & Conditions", key="inv_terms", height=100, on_change=invalidate_pdf)
+    with st.expander("🏦 Bank, Terms, WhatsApp Config, & Footer", expanded=False, key=f"cfg_exp_{st.session_state['_config_exp_key']}"):
+        tab_bank, tab_terms, tab_wa, tab_footer = st.tabs(["🏦 Bank Data", "📜 Terms", "📱 WhatsApp", "📝 Footer"])
         
-        st.divider()
-        st.caption("📱 **WhatsApp Template** - Gunakan placeholder: `{nama}`, `{inv_no}`")
-        
-        default_wa_template = """Halo Kak {nama}! 👋
+        with tab_bank:
+            b_col1, b_col2, b_col3 = st.columns(3)
+            b_col1.text_input("Bank Name", key="bank_nm", on_change=invalidate_pdf)
+            b_col2.text_input("Account No", key="bank_ac", on_change=invalidate_pdf)
+            b_col3.text_input("Account Holder", key="bank_an", on_change=invalidate_pdf)
 
-Terima kasih sudah mempercayakan momen spesial Anda kepada kami. ✨
+        with tab_terms:
+            st.text_area("Terms & Conditions", key="inv_terms", height=120, on_change=invalidate_pdf)
+            
+        with tab_wa:
+            st.caption("Template Placeholder: `{nama}`, `{inv_no}`")
+            # Plain text template relative to user request to avoid encoding issues
+            default_wa_template = """Halo Kak {nama}!
+
+Terima kasih sudah mempercayakan momen spesial Anda kepada kami.
 
 Berikut detail invoice Anda:
-📄 Invoice: {inv_no}
+Invoice {inv_no}
 
 Silakan cek file invoice yang sudah kami kirimkan ya. Jika ada pertanyaan, jangan ragu untuk menghubungi kami.
 
 Warm regards,
-ORBIT Team 🎬"""
+ORBIT Team"""
+            
+            if "wa_template" not in st.session_state:
+                st.session_state["wa_template"] = db.get_config("wa_template_default") or default_wa_template
+            
+            st.text_area("WhatsApp Template", key="wa_template", height=200, label_visibility="collapsed")
+            
+        with tab_footer:
+            st.caption("Contact Info (Satu baris per item)")
+            if "inv_footer" not in st.session_state:
+                 st.session_state["inv_footer"] = db.get_config("inv_footer_default", DEFAULT_FOOTER_ITEMS)
+            st.text_area("Footer Text", key="inv_footer", height=120, on_change=invalidate_pdf, label_visibility="collapsed")
         
-        if "wa_template" not in st.session_state:
-            st.session_state["wa_template"] = db.get_config("wa_template_default") or default_wa_template
-        
-        st.text_area("WhatsApp Template", key="wa_template", height=200)
+        st.write("")
         
         if st.button("💾 Save All Settings", help="Save as defaults", use_container_width=True):
             db.set_config("bank_nm_default", st.session_state["bank_nm"])
@@ -630,7 +656,12 @@ ORBIT Team 🎬"""
             db.set_config("bank_an_default", st.session_state["bank_an"])
             db.set_config("inv_terms_default", st.session_state["inv_terms"])
             db.set_config("wa_template_default", st.session_state["wa_template"])
+            db.set_config("inv_footer_default", st.session_state["inv_footer"])
             st.toast("All settings saved!", icon="✅")
+            
+            # Collapse by cycling key
+            st.session_state["_config_exp_key"] += 1
+            st.rerun()
 
 
 def render_payment_section(grand_total: float) -> None:
@@ -928,63 +959,8 @@ def render_payment_section(grand_total: float) -> None:
     pdf_bytes = st.session_state.get("generated_pdf_bytes")
     
     if pdf_bytes:
-        # --- PDF Ready: Show all action options ---
-        st.success("✅ PDF Generated!")
-        
-        inv_no = st.session_state.get("inv_no", "invoice").replace("/", "_")
-        client_email = (st.session_state.get("inv_client_email") or "").strip()
-        
-        # Row 1: Download PDF (full width)
-        if st.download_button(
-            "📥 Download PDF",
-            data=pdf_bytes,
-            file_name=f"{inv_no}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-            type="primary"
-        ):
-            st.session_state["pdf_downloaded"] = True
-        
-        # Row 2: Save to History + Start New
-        save_col, new_col = st.columns(2)
-        
-        edit_id = st.session_state.get("editing_invoice_id")
-        save_label = f"💾 Update (#{edit_id})" if edit_id else "💾 Save to History"
-        
-        with save_col:
-            if st.button(save_label, use_container_width=True, on_click=_handle_save_history, args=(inv_no, client_email, pdf_bytes)):
-                pass
-        with new_col:
-            if st.button("🆕 New Invoice", use_container_width=True, on_click=cb_reset_transaction):
-                pass
-        
-        # Row 3: WhatsApp Share (requires download first)
-        client_phone = (st.session_state.get("inv_client_phone") or "").strip()
-        client_name = st.session_state.get("inv_client_name", "")
-        has_downloaded = st.session_state.get("pdf_downloaded", False)
-        
-        if client_phone and has_downloaded:
-            # Clean phone number (remove +, spaces, dashes)
-            clean_phone = "".join(filter(str.isdigit, client_phone))
-            if not clean_phone.startswith("62"):
-                if clean_phone.startswith("0"):
-                    clean_phone = "62" + clean_phone[1:]
-                else:
-                    clean_phone = "62" + clean_phone
-            
-            # Use configurable template with placeholder substitution
-            wa_template = st.session_state.get("wa_template", "Halo {nama}! Invoice: {inv_no}")
-            wa_message = wa_template.replace("{nama}", client_name).replace("{inv_no}", inv_no)
-            
-            import urllib.parse
-            encoded_msg = urllib.parse.quote(wa_message)
-            wa_link = f"https://wa.me/{clean_phone}?text={encoded_msg}"
-            
-            st.link_button("📱 Share via WhatsApp", wa_link, use_container_width=True)
-        elif client_phone and not has_downloaded:
-            st.button("📱 Share via WhatsApp", disabled=True, use_container_width=True, help="Download PDF dulu sebelum share")
-        else:
-            st.button("📱 Share via WhatsApp", disabled=True, use_container_width=True, help="Isi Client WhatsApp dulu")
+        # Use the dedicated download section function to avoid duplicates and ensure consistent logic
+        render_download_section()
     else:
         # --- No PDF yet: Validate and show Process button ---
         
@@ -1320,8 +1296,16 @@ def generate_pdf_wrapper(subtotal: float, grand_total: float) -> None:
             "bank_name": st.session_state.get("bank_nm", ""),
             "bank_acc": st.session_state.get("bank_ac", ""),
             "bank_holder": st.session_state.get("bank_an", ""),
-            "payment_proof": st.session_state.get("pp_cached") or []
+            "payment_proof": st.session_state.get("pp_cached") or [],
+            "footer_info": [x.strip() for x in str(st.session_state.get("inv_footer", "")).split("\n") if x.strip()]
         }
+        
+        # Format Wedding date to English: "Sunday, 12 January 2026"
+        w_date = st.session_state.get("inv_wedding_date")
+        if w_date:
+            meta["wedding_date"] = w_date.strftime("%A, %d %B %Y")
+        else:
+            meta["wedding_date"] = ""
 
         with st.spinner("Generating PDF..."):
             pdf_bytes = invoice_mod.generate_pdf_bytes(meta, st.session_state["inv_items"], grand_total)
@@ -1335,6 +1319,13 @@ def generate_pdf_wrapper(subtotal: float, grand_total: float) -> None:
     except Exception as e:
         st.session_state["generated_pdf_bytes"] = None
         st.error(f"Error generating PDF: {e}")
+
+@st.dialog("📤 Kirim via WhatsApp")
+def open_wa_dialog(wa_url: str):
+    st.warning("⚠️ **PENTING**: File PDF **TIDAK** otomatis terkirim.")
+    st.write("Silakan klik tombol di bawah untuk membuka chat, lalu **lampirkan file PDF** yang sudah Anda download secara manual.")
+    st.write("")
+    st.link_button("🚀 Lanjut ke WhatsApp", wa_url, use_container_width=True)
 
 def render_download_section() -> None:
     pdf_data = st.session_state.get("generated_pdf_bytes")
@@ -1371,13 +1362,35 @@ def render_download_section() -> None:
             use_container_width=True,
         )
 
-        # Shared Email (Maintenance Mode)
-        col2.button(
-            "☁️ Share (Maintenance)", 
-            disabled=True, 
-            use_container_width=True, 
-            help="Fitur ini sedang dalam pemeliharaan (Maintenance up to date nanti)."
+        # WhatsApp Share Logic
+        phone = (st.session_state.get("inv_client_phone") or "").strip()
+        # Basic sanitization for WA link (remove non-digits)
+        import re
+        safe_phone = re.sub(r"[^0-9]", "", phone)
+        if safe_phone.startswith("0"): 
+             safe_phone = "62" + safe_phone[1:] # Assume ID if starts with 0
+        
+        wa_tpl = st.session_state.get("wa_template", "")
+        # Fill template
+        msg = wa_tpl.format(
+            nama=st.session_state.get("inv_client_name", "Kak"),
+            inv_no=st.session_state.get("inv_no", "-")
         )
+        # Force clean corruption characters (fixing previous bug)
+        msg = msg.replace("\ufffd", " ")
+        
+        import urllib.parse
+        encoded_msg = urllib.parse.quote(msg)
+        
+        # Logic: If phone exists -> Direct Chat. If not -> Contact Picker.
+        if safe_phone:
+            wa_url = f"https://wa.me/{safe_phone}?text={encoded_msg}"
+        else:
+            wa_url = f"https://api.whatsapp.com/send?text={encoded_msg}"
+        
+        with col2:
+            if st.button("📱 Open WhatsApp", use_container_width=True):
+                open_wa_dialog(wa_url)
         
         # if col2.button("☁️ Share Email", type="primary", use_container_width=True):
         #    # ... existing logic masked out ...
@@ -1419,8 +1432,16 @@ def _handle_save_history(inv_no: str, client_email: str, pdf_bytes: bytes) -> No
             "bank_name": st.session_state.get("bank_nm", ""),
             "bank_acc": st.session_state.get("bank_ac", ""),
             "bank_holder": st.session_state.get("bank_an", ""),
-            "payment_proof": st.session_state.get("pp_cached") or []
+            "payment_proof": st.session_state.get("pp_cached") or [],
+            "footer_info": [x.strip() for x in str(st.session_state.get("inv_footer", "")).split("\n") if x.strip()]
         }
+
+        # Format Wedding date to English for DB meta (consistent with generation)
+        w_date = st.session_state.get("inv_wedding_date")
+        if w_date:
+            meta["wedding_date"] = w_date.strftime("%A, %d %B %Y")
+        else:
+            meta["wedding_date"] = ""
         
         # Recalc Totals for DB
         items = st.session_state["inv_items"]
