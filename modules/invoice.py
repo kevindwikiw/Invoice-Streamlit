@@ -118,76 +118,107 @@ def _draw_footer_contact(c, W):
     # Merging icon and text into one string guarantees they are on the same baseline.
     
 def _draw_footer_contact(c, W, items=None):
+    """Draws footer bar with PNG icons and text."""
+    import os
+    from reportlab.lib.utils import ImageReader
+    
     bar_h = 10 * mm
     c.setFillColor(colors.HexColor("#1a1a1a"))
     c.rect(0, 0, W, bar_h, fill=1, stroke=0)
     
-    # 1. Font Setup
-    emoji_font = "Helvetica"
-    try:
-        pdfmetrics.registerFont(TTFont('SegoeEmoji', 'C:\\Windows\\Fonts\\seguiemj.ttf'))
-        emoji_font = 'SegoeEmoji'
-    except:
-        pass
-
+    # Icon mapping: keyword in text -> PNG filename
+    icon_map = {
+        "jl.": "Location.png",
+        "panembakan": "Location.png",
+        "@gmail": "Email.png",
+        "email": "Email.png", 
+        "@theorbitphoto": "IG.png",
+        "instagram": "IG.png",
+        "0813": "Phonecall.png",
+        "phone": "Phonecall.png",
+        "hp": "Phonecall.png",
+    }
+    
+    # Assets folder path
+    assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
+    
     if not items:
-        # Default fallback
+        # Default fallback (plain text, no emoji)
         items = [
-            "📍 Jl. Panembakan Gg Sukamaju 15 No. 3, Kota Cimahi",
-            "📧 theorbitphoto@gmail.com",
-            "📸 @theorbitphoto",
-            "📞 0813-2333-1506"
+            "Jl. Panembakan Gg Sukamaju 15 No. 3, Kota Cimahi",
+            "theorbitphoto@gmail.com",
+            "@theorbitphoto",
+            "0813-2333-1506"
         ]
     
-    # 3. Font Setup
-    # Must use a font that supports BOTH Emoji and Text for the single string.
-    # Segoe UI Emoji is perfect for this on Windows.
-    use_font = emoji_font if emoji_font != "Helvetica" else "Helvetica"
+    # Font setup
+    font_name = "Helvetica"
     font_size = 7
+    icon_size = 3.5 * mm  # Size of PNG icons
+    icon_spacing = 1.5 * mm  # Space between icon and text
+    sep_str = "   |   "
     
-    sep_str = "     |     "
+    c.setFont(font_name, font_size)
+    sep_w = c.stringWidth(sep_str, font_name, font_size)
     
-    # 4. Measure Total Width
-    total_w = 0
-    item_widths = [] 
+    # Helper: Match item text to icon file
+    def get_icon_for_item(text):
+        text_lower = text.lower()
+        for keyword, icon_file in icon_map.items():
+            if keyword.lower() in text_lower:
+                icon_path = os.path.join(assets_dir, icon_file)
+                if os.path.exists(icon_path):
+                    return icon_path
+        return None
     
-    sep_w = c.stringWidth(sep_str, use_font, font_size)
+    # Strip emojis from text (if user's DB still has them)
+    def clean_text(text):
+        # Remove common emoji unicode ranges or just the first char if it's emoji-like
+        import re
+        # Simple approach: remove everything that's not ASCII-printable or common unicode letters
+        cleaned = re.sub(r'^[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF\ufffd]+\s*', '', text)
+        return cleaned.strip()
     
-    for txt in items:
-        # Measure entire string (Icon + Text) at once
-        try:
-            w_t = c.stringWidth(txt, use_font, font_size)
-        except:
-             # Fallback if measurer fails on weird chars
-            w_t = c.stringWidth(txt, "Helvetica", font_size)
-            
-        item_widths.append(w_t)
-        total_w += w_t
-        
-    # Add separators width
-    if len(items) > 1:
-        total_w += sep_w * (len(items) - 1)
+    # Prepare items: (icon_path, clean_text, text_width)
+    prepared_items = []
+    for item_text in items:
+        cleaned = clean_text(item_text)
+        icon_path = get_icon_for_item(cleaned)
+        text_w = c.stringWidth(cleaned, font_name, font_size)
+        # Total width: icon + spacing + text (if icon exists)
+        item_w = text_w
+        if icon_path:
+            item_w += icon_size + icon_spacing
+        prepared_items.append((icon_path, cleaned, item_w))
     
-    # 5. Draw Loop
-    # Vertical Alignment: 
-    # Center of 10mm bar. 
-    # 4mm is a safe baseline for 7pt text.
-    y_baseline = 4.0 * mm 
+    # Calculate total width (all items + separators)
+    total_w = sum(item[2] for item in prepared_items)
+    if len(prepared_items) > 1:
+        total_w += sep_w * (len(prepared_items) - 1)
     
+    # Drawing
+    y_baseline = 4.0 * mm
+    y_icon = (bar_h - icon_size) / 2  # Center icon vertically
     cur_x = (W - total_w) / 2
     
     c.setFillColor(colors.white)
-    c.setFont(use_font, font_size)
+    c.setFont(font_name, font_size)
     
-    for i, txt in enumerate(items):
-        w_t = item_widths[i]
+    for i, (icon_path, text, item_w) in enumerate(prepared_items):
+        # Draw icon if exists
+        if icon_path:
+            try:
+                c.drawImage(icon_path, cur_x, y_icon, width=icon_size, height=icon_size, mask='auto')
+                cur_x += icon_size + icon_spacing
+            except Exception as e:
+                print(f"[Footer] Icon draw error: {e}")
         
-        # Draw the single string (Icon + Text naturally aligned)
-        c.drawString(cur_x, y_baseline, txt)
-        cur_x += w_t
+        # Draw text
+        c.drawString(cur_x, y_baseline, text)
+        cur_x += c.stringWidth(text, font_name, font_size)
         
-        # Draw Separator
-        if i < len(items) - 1:
+        # Draw separator
+        if i < len(prepared_items) - 1:
             c.drawString(cur_x, y_baseline, sep_str)
             cur_x += sep_w
 
