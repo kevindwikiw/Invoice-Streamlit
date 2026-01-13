@@ -337,18 +337,10 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
         c.setFont("Helvetica-Oblique", 8)
         c.drawRightString(W - margin - 60 * mm, y_meta - 9 * mm, title)
 
-    # Vertical divider line - aligned with RIGHT edge of PRICE column
-    # Table columns from right: TOTAL(31mm) + QTY(12mm) = 43mm
-    divider_x = W - margin - 43 * mm
-    c.setStrokeColor(colors.HexColor("#e2e8f0"))  # Light gray
-    c.setLineWidth(0.5)
-    c.line(divider_x, y_meta + 3*mm, divider_x, y_meta - 12*mm)
-
     c.setFillColor(DARK_GRAY)
     c.setFont("Helvetica", 8)
     c.drawRightString(W - margin, y_meta, f"Invoice: {inv_no}")
     c.drawRightString(W - margin, y_meta - 4 * mm, f"Date: {date_str}")
-
 
     # =========================================================
     # 3. ITEM TABLE
