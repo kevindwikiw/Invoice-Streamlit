@@ -2,9 +2,11 @@
 import os
 import sqlite3
 import streamlit as st
+import json
+from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any
 
-# Try to import psycopg2 for Postgres
+# --- Optional Postgres Support ---
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
@@ -12,7 +14,8 @@ try:
 except ImportError:
     HAS_PSYCOPG2 = False
 
-# Load .env locally (Manual implementation to save dependency)
+
+# --- Environment Loading ---
 def _load_env_file():
     try:
         if os.path.exists(".env"):
@@ -28,7 +31,8 @@ def _load_env_file():
 
 _load_env_file()
 
-# Priority:
+
+# --- Database Configuration ---
 # 1. Streamlit Secrets (Deployment)
 # 2. Environment Variable (.env)
 DATABASE_URL = None
@@ -41,119 +45,142 @@ except (FileNotFoundError, AttributeError):
 if not DATABASE_URL:
     DATABASE_URL = os.getenv("DATABASE_URL")
 
-# --- MODE DETECTION ---
-# If DATABASE_URL is present -> Postgres Mode
-# If None -> SQLite Mode
 USE_POSTGRES = bool(DATABASE_URL) and HAS_PSYCOPG2
-
 DB_SQLITE = 'packages.db'
 
-# ----------------------------------------------------
-# 1. SETUP & INITIALIZATION
-# ----------------------------------------------------
-def get_pg_connection():
-    if not USE_POSTGRES:
-        raise ValueError("Not in Postgres Mode.")
-    return psycopg2.connect(DATABASE_URL)
 
-def init_db() -> None:
-    """Initialize DB Schema (SQLite or Postgres)."""
-    if USE_POSTGRES:
-        _init_postgres()
-    else:
-        _init_sqlite()
+# --- Adapter Interface ---
+class DatabaseAdapter(ABC):
+    """Abstract Base Class for Database Interactions."""
+    
+    @abstractmethod
+    def init_db(self) -> None:
+        pass
+    
+    @abstractmethod
+    def get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        pass
+        
+    @abstractmethod
+    def set_config(self, key: str, value: str) -> None:
+        pass
+        
+    @abstractmethod
+    def save_invoice(self, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+        pass
+        
+    @abstractmethod
+    def get_invoices(self, limit: int = 50) -> List[Dict[str, Any]]:
+        pass
+        
+    @abstractmethod
+    def get_invoice_details(self, invoice_id: int) -> Optional[Dict[str, Any]]:
+        pass
+        
+    @abstractmethod
+    def update_invoice(self, invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+        pass
+        
+    @abstractmethod
+    def delete_invoice(self, invoice_id: int) -> None:
+        pass
+    
+    @abstractmethod
+    def get_dashboard_stats(self) -> Dict[str, Any]:
+        pass
 
-# ... existing code ...
+    # Package Management
+    @abstractmethod
+    def load_packages(self) -> List[Dict[str, Any]]:
+        pass
 
-# ... (previous code) ...
+    @abstractmethod
+    def add_package(self, name: str, price: float, category: str, description: str) -> None:
+        pass
 
-def _init_sqlite():
-    with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS packages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                price REAL NOT NULL,
-                category TEXT,
-                description TEXT
-            )
-        ''')
-        # Config Table
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS app_config (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        ''')
-        # Invoices History Table
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS invoices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                invoice_no TEXT,
-                client_name TEXT,
-                date TEXT,
-                total_amount REAL,
-                invoice_data TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        conn.commit()
+    @abstractmethod
+    def update_package(self, package_id: int, name: str, price: float, category: str, description: str) -> None:
+        pass
 
-def _init_postgres():
-    try:
-        with get_pg_connection() as conn:
-            with conn.cursor() as c:
-                c.execute('''
-                    CREATE TABLE IF NOT EXISTS packages (
-                        id SERIAL PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        price REAL NOT NULL,
-                        category TEXT,
-                        description TEXT
-                    );
-                ''')
-                # Config Table
-                c.execute('''
-                    CREATE TABLE IF NOT EXISTS app_config (
-                        key TEXT PRIMARY KEY,
-                        value TEXT
-                    );
-                ''')
-                # Invoices History Table
-                c.execute('''
-                    CREATE TABLE IF NOT EXISTS invoices (
-                        id SERIAL PRIMARY KEY,
-                        invoice_no TEXT,
-                        client_name TEXT,
-                        date TEXT,
-                        total_amount REAL,
-                        invoice_data TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                ''')
+    @abstractmethod
+    def delete_package(self, package_id: int) -> None:
+        pass
+        
+    @abstractmethod
+    def delete_all_packages(self) -> None:
+        pass
+        
+    @abstractmethod
+    def is_db_empty(self) -> bool:
+        pass
+
+
+# --- SQLite Implementation ---
+class SQLiteAdapter(DatabaseAdapter):
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+
+    def _connect(self):
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def init_db(self) -> None:
+        with self._connect() as conn:
+            c = conn.cursor()
+            # Packages
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS packages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    category TEXT,
+                    description TEXT
+                )
+            ''')
+            # Config
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS app_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            ''')
+            # Invoices
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS invoices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    invoice_no TEXT,
+                    client_name TEXT,
+                    date TEXT,
+                    total_amount REAL,
+                    invoice_data TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             conn.commit()
-            print("[DB] Postgres Schema initialized.")
-    except Exception as e:
-        print(f"[DB ERROR] Postgres Init failed: {e}")
 
-# ... (existing config functions) ...
+    def get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        try:
+            with self._connect() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM app_config WHERE key = ?", (key,))
+                row = cursor.fetchone()
+                return row['value'] if row else default
+        except Exception as e:
+            print(f"[SQLite] get_config failed: {e}")
+            return default
 
-# ----------------------------------------------------
-# 5. INVOICE HISTORY OPERATIONS
-# ----------------------------------------------------
-def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
-    """Saves an invoice snapshot to history."""
-    if USE_POSTGRES:
-        with get_pg_connection() as conn:
-            with conn.cursor() as c:
-                c.execute("""
-                    INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json))
-            conn.commit()
-    else:
-        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
+    def set_config(self, key: str, value: str) -> None:
+        try:
+            with self._connect() as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, value))
+                conn.commit()
+        except Exception as e:
+            print(f"[SQLite] set_config failed: {e}")
+
+    def save_invoice(self, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+        with self._connect() as conn:
             c = conn.cursor()
             c.execute("""
                 INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data)
@@ -161,27 +188,8 @@ def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount:
             """, (invoice_no, client_name, date_str, total_amount, invoice_data_json))
             conn.commit()
 
-def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
-    """Fetches recent invoices list (metadata only)."""
-    # We fetch LENGTH(invoice_data) to guess if an image is attached (heuristically > 10KB)
-    if USE_POSTGRES:
-        # Postgres JSON extraction
-        query = """
-            SELECT id, invoice_no, client_name, date, total_amount, created_at, 
-                   LENGTH(invoice_data) as data_size,
-                   invoice_data::json->'meta'->>'client_phone' as client_phone
-            FROM invoices ORDER BY id DESC LIMIT %s
-        """
-        try:
-            with get_pg_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as c:
-                    c.execute(query, (limit,))
-                    return [dict(row) for row in c.fetchall()]
-        except Exception as e:
-            print(f"[DB ERROR] get_invoices failed: {e}")
-            return []
-    else:
-        # SQLite JSON extraction
+    def get_invoices(self, limit: int = 50) -> List[Dict[str, Any]]:
+        # Using json_extract for client_phone
         query = """
             SELECT id, invoice_no, client_name, date, total_amount, created_at, 
                    LENGTH(invoice_data) as data_size,
@@ -189,63 +197,26 @@ def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
             FROM invoices ORDER BY id DESC LIMIT ?
         """
         try:
-            with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
+            with self._connect() as conn:
                 c = conn.cursor()
                 c.execute(query, (limit,))
                 return [dict(row) for row in c.fetchall()]
         except Exception as e:
-            print(f"[DB ERROR] get_invoices failed: {e}")
+            print(f"[SQLite] get_invoices failed: {e}")
             return []
 
-def get_invoice_details(invoice_id: int) -> Optional[Dict[str, Any]]:
-    """Fetches full invoice data (including JSON snapshot)."""
-    query = "SELECT * FROM invoices WHERE id = %s"
-    if USE_POSTGRES:
+    def get_invoice_details(self, invoice_id: int) -> Optional[Dict[str, Any]]:
         try:
-            with get_pg_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as c:
-                    c.execute(query, (invoice_id,))
-                    row = c.fetchone()
-                    return dict(row) if row else None
-        except Exception:
-            return None
-    else:
-        try:
-            with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
+            with self._connect() as conn:
                 c = conn.cursor()
-                c.execute(query.replace("%s", "?"), (invoice_id,))
+                c.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,))
                 row = c.fetchone()
                 return dict(row) if row else None
         except Exception:
             return None
 
-def delete_invoice(invoice_id: int) -> None:
-    if USE_POSTGRES:
-        with get_pg_connection() as conn:
-            with conn.cursor() as c:
-                c.execute('DELETE FROM invoices WHERE id = %s', (invoice_id,))
-            conn.commit()
-    else:
-        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-            c = conn.cursor()
-            c.execute('DELETE FROM invoices WHERE id = ?', (invoice_id,))
-            conn.commit()
-
-def update_invoice(invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
-    """Updates an existing invoice."""
-    if USE_POSTGRES:
-        with get_pg_connection() as conn:
-            with conn.cursor() as c:
-                c.execute("""
-                    UPDATE invoices 
-                    SET invoice_no=%s, client_name=%s, date=%s, total_amount=%s, invoice_data=%s
-                    WHERE id=%s
-                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, invoice_id))
-            conn.commit()
-    else:
-        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
+    def update_invoice(self, invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+        with self._connect() as conn:
             c = conn.cursor()
             c.execute("""
                 UPDATE invoices
@@ -254,72 +225,317 @@ def update_invoice(invoice_id: int, invoice_no: str, client_name: str, date_str:
             """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, invoice_id))
             conn.commit()
 
-def get_dashboard_stats() -> Dict[str, Any]:
-    """Returns quick dashboard stats: Total Revenue, Invoice Count."""
-    query = "SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue FROM invoices"
-    
-    try:
-        if USE_POSTGRES:
-            with get_pg_connection() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as c:
-                    c.execute(query)
-                    return dict(c.fetchone())
-        else:
-            with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
+    def delete_invoice(self, invoice_id: int) -> None:
+        with self._connect() as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
+            conn.commit()
+
+    def get_dashboard_stats(self) -> Dict[str, Any]:
+        query = "SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue FROM invoices"
+        try:
+            with self._connect() as conn:
                 c = conn.cursor()
                 c.execute(query)
-                return dict(c.fetchone())
-    except Exception as e:
-        print(f"Stats Error: {e}")
-        return {"count": 0, "revenue": 0}
+                row = c.fetchone()
+                return dict(row) if row else {"count": 0, "revenue": 0}
+        except Exception:
+            return {"count": 0, "revenue": 0}
 
-# ... existing code ...
+    def load_packages(self) -> List[Dict[str, Any]]:
+        try:
+            with self._connect() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM packages")
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception:
+            return []
 
-# ----------------------------------------------------
-# 4. CONFIGURATION (Persistent Settings)
-# ----------------------------------------------------
+    def add_package(self, name: str, price: float, category: str, description: str) -> None:
+        with self._connect() as conn:
+            c = conn.cursor()
+            c.execute(
+                'INSERT INTO packages (name, price, category, description) VALUES (?, ?, ?, ?)',
+                (name, price, category, description)
+            )
+            conn.commit()
+
+    def update_package(self, package_id: int, name: str, price: float, category: str, description: str) -> None:
+        with self._connect() as conn:
+            c = conn.cursor()
+            c.execute("""
+                UPDATE packages
+                SET name = ?, price = ?, category = ?, description = ?
+                WHERE id = ?
+            """, (name, price, category, description, package_id))
+            conn.commit()
+
+    def delete_package(self, package_id: int) -> None:
+        with self._connect() as conn:
+            c = conn.cursor()
+            c.execute('DELETE FROM packages WHERE id = ?', (package_id,))
+            conn.commit()
+
+    def delete_all_packages(self) -> None:
+        with self._connect() as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM packages")
+            conn.commit()
+
+    def is_db_empty(self) -> bool:
+        try:
+            with self._connect() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM packages")
+                res = cursor.fetchone()
+                return res[0] == 0 if res else True
+        except Exception:
+            return True
+
+
+# --- Postgres Implementation ---
+class PostgresAdapter(DatabaseAdapter):
+    def __init__(self, dsn: str):
+        self.dsn = dsn
+
+    def _connect(self):
+        return psycopg2.connect(self.dsn)
+
+    def init_db(self) -> None:
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as c:
+                    c.execute('''
+                        CREATE TABLE IF NOT EXISTS packages (
+                            id SERIAL PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            price REAL NOT NULL,
+                            category TEXT,
+                            description TEXT
+                        );
+                    ''')
+                    c.execute('''
+                        CREATE TABLE IF NOT EXISTS app_config (
+                            key TEXT PRIMARY KEY,
+                            value TEXT
+                        );
+                    ''')
+                    c.execute('''
+                        CREATE TABLE IF NOT EXISTS invoices (
+                            id SERIAL PRIMARY KEY,
+                            invoice_no TEXT,
+                            client_name TEXT,
+                            date TEXT,
+                            total_amount REAL,
+                            invoice_data TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+                    ''')
+                conn.commit()
+                print("[DB] Postgres Schema initialized.")
+        except Exception as e:
+            print(f"[Postgres] Init failed: {e}")
+
+    def get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT value FROM app_config WHERE key = %s", (key,))
+                    row = cursor.fetchone()
+                    return row[0] if row else default
+        except Exception as e:
+            print(f"[Postgres] get_config failed: {e}")
+            return default
+
+    def set_config(self, key: str, value: str) -> None:
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO app_config (key, value) VALUES (%s, %s)
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+                    """, (key, value))
+                conn.commit()
+        except Exception as e:
+            print(f"[Postgres] set_config failed: {e}")
+
+    def save_invoice(self, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as c:
+                c.execute("""
+                    INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json))
+            conn.commit()
+
+    def get_invoices(self, limit: int = 50) -> List[Dict[str, Any]]:
+        query = """
+            SELECT id, invoice_no, client_name, date, total_amount, created_at, 
+                   LENGTH(invoice_data) as data_size,
+                   invoice_data::json->'meta'->>'client_phone' as client_phone
+            FROM invoices ORDER BY id DESC LIMIT %s
+        """
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query, (limit,))
+                    return [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            print(f"[Postgres] get_invoices failed: {e}")
+            return []
+
+    def get_invoice_details(self, invoice_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute("SELECT * FROM invoices WHERE id = %s", (invoice_id,))
+                    row = c.fetchone()
+                    return dict(row) if row else None
+        except Exception:
+            return None
+
+    def update_invoice(self, invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as c:
+                c.execute("""
+                    UPDATE invoices 
+                    SET invoice_no=%s, client_name=%s, date=%s, total_amount=%s, invoice_data=%s
+                    WHERE id=%s
+                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, invoice_id))
+            conn.commit()
+
+    def delete_invoice(self, invoice_id: int) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as c:
+                c.execute('DELETE FROM invoices WHERE id = %s', (invoice_id,))
+            conn.commit()
+
+    def get_dashboard_stats(self) -> Dict[str, Any]:
+        query = "SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue FROM invoices"
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query)
+                    row = c.fetchone()
+                    return dict(row) if row else {"count": 0, "revenue": 0}
+        except Exception:
+            return {"count": 0, "revenue": 0}
+
+    def load_packages(self) -> List[Dict[str, Any]]:
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                    cursor.execute("SELECT * FROM packages ORDER BY id ASC")
+                    return [dict(row) for row in cursor.fetchall()]
+        except Exception:
+            return []
+
+    def add_package(self, name: str, price: float, category: str, description: str) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as c:
+                c.execute(
+                    'INSERT INTO packages (name, price, category, description) VALUES (%s, %s, %s, %s)',
+                    (name, price, category, description)
+                )
+            conn.commit()
+
+    def update_package(self, package_id: int, name: str, price: float, category: str, description: str) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as c:
+                c.execute("""
+                    UPDATE packages
+                    SET name = %s, price = %s, category = %s, description = %s
+                    WHERE id = %s
+                """, (name, price, category, description, package_id))
+            conn.commit()
+
+    def delete_package(self, package_id: int) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as c:
+                c.execute('DELETE FROM packages WHERE id = %s', (package_id,))
+            conn.commit()
+
+    def delete_all_packages(self) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as c:
+                c.execute("TRUNCATE TABLE packages RESTART IDENTITY;")
+            conn.commit()
+
+    def is_db_empty(self) -> bool:
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT COUNT(*) FROM packages")
+                    res = cursor.fetchone()
+                    return res[0] == 0 if res else True
+        except Exception:
+            return True
+
+
+# --- Factory & Singleton ---
+if USE_POSTGRES:
+    current_db = PostgresAdapter(DATABASE_URL)
+else:
+    current_db = SQLiteAdapter(DB_SQLITE)
+
+
+# --- Public API (Proxies) ---
+
+def init_db() -> None:
+    current_db.init_db()
+
 def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
-    """Fetch a setting value by key."""
-    query = "SELECT value FROM app_config WHERE key = %s" if USE_POSTGRES else "SELECT value FROM app_config WHERE key = ?"
-    
-    try:
-        conn_ctx = get_pg_connection() if USE_POSTGRES else sqlite3.connect(DB_SQLITE, timeout=10)
-        with conn_ctx as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, (key,))
-            row = cursor.fetchone()
-            return row[0] if row else default
-    except Exception as e:
-        print(f"[DB ERROR] get_config failed: {e}")
-        return default
+    return current_db.get_config(key, default)
 
 def set_config(key: str, value: str) -> None:
-    """Upsert a setting value."""
-    if USE_POSTGRES:
-        query = """
-            INSERT INTO app_config (key, value) VALUES (%s, %s)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
-        """
-        conn_ctx = get_pg_connection()
-    else:
-        query = """
-            INSERT INTO app_config (key, value) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = expected.value;
-        """ 
-        # SQLite ON CONFLICT syntax is slightly different or standard. 
-        # Standard: INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)
-        query = "INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)"
-        conn_ctx = sqlite3.connect(DB_SQLITE, timeout=10)
+    current_db.set_config(key, value)
 
-    try:
-        with conn_ctx as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, (key, value))
-        conn.commit()
-    except Exception as e:
-        print(f"[DB ERROR] set_config failed: {e}")
+def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+    current_db.save_invoice(invoice_no, client_name, date_str, total_amount, invoice_data_json)
 
+def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
+    return current_db.get_invoices(limit)
+
+def get_invoice_details(invoice_id: int) -> Optional[Dict[str, Any]]:
+    return current_db.get_invoice_details(invoice_id)
+
+def update_invoice(invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+    current_db.update_invoice(invoice_id, invoice_no, client_name, date_str, total_amount, invoice_data_json)
+
+def delete_invoice(invoice_id: int) -> None:
+    current_db.delete_invoice(invoice_id)
+
+def get_dashboard_stats() -> Dict[str, Any]:
+    return current_db.get_dashboard_stats()
+
+# Cached Wrapper for Load Packages
+@st.cache_data(ttl=300, show_spinner=False)
+def load_packages() -> List[Dict[str, Any]]:
+    return current_db.load_packages()
+
+def _clear_cache() -> None:
+    load_packages.clear()
+
+def add_package(name: str, price: float, category: str, description: str) -> None:
+    current_db.add_package(name, price, category, description)
+    _clear_cache()
+
+def update_package(package_id: int, name: str, price: float, category: str, description: str) -> None:
+    current_db.update_package(package_id, name, price, category, description)
+    _clear_cache()
+
+def delete_package(package_id: int) -> None:
+    current_db.delete_package(package_id)
+    _clear_cache()
+
+def delete_all_packages() -> None:
+    current_db.delete_all_packages()
+    _clear_cache()
+
+def is_db_empty() -> bool:
+    return current_db.is_db_empty()
+
+# Logic independent of Adapter
 def get_next_invoice_seq(prefix: str) -> int:
     """
     Get and increment invoice sequence for a given client prefix.
@@ -328,7 +544,7 @@ def get_next_invoice_seq(prefix: str) -> int:
     """
     config_key = f"inv_seq_{prefix}"
     
-    # Get current value
+    # Get current value (calls adapter)
     current = get_config(config_key, "0")
     try:
         current_seq = int(current)
@@ -338,132 +554,7 @@ def get_next_invoice_seq(prefix: str) -> int:
     # Increment
     next_seq = current_seq + 1
     
-    # Save back
+    # Save back (calls adapter)
     set_config(config_key, str(next_seq))
     
     return next_seq
-
-
-# ----------------------------------------------------
-# 2. READ OPERATIONS (CACHED)
-# ----------------------------------------------------
-@st.cache_data(ttl=300, show_spinner=False)
-def load_packages() -> List[Dict[str, Any]]:
-    if USE_POSTGRES:
-        return _load_postgres()
-    return _load_sqlite()
-
-def _load_sqlite() -> List[Dict[str, Any]]:
-    try:
-        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM packages")
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-    except Exception as e:
-        print(f"[DB ERROR] SQLite Load failed: {e}")
-        return []
-
-def _load_postgres() -> List[Dict[str, Any]]:
-    try:
-        with get_pg_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute("SELECT * FROM packages ORDER BY id ASC")
-                rows = cursor.fetchall()
-                return [dict(row) for row in rows]
-    except Exception as e:
-        print(f"[DB ERROR] Postgres Load failed: {e}")
-        return []
-
-def is_db_empty() -> bool:
-    if USE_POSTGRES:
-        try:
-            with get_pg_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute("SELECT COUNT(*) FROM packages")
-                    res = cursor.fetchone()
-                    return res[0] == 0 if res else True
-        except Exception:
-            return True
-    else:
-        try:
-            with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM packages")
-                res = cursor.fetchone()
-                return res[0] == 0 if res else True
-        except Exception:
-            return True
-
-# ----------------------------------------------------
-# 3. WRITE OPERATIONS (AUTO CLEAR CACHE)
-# ----------------------------------------------------
-def _clear_cache() -> None:
-    load_packages.clear()
-
-def add_package(name: str, price: float, category: str, description: str) -> None:
-    if USE_POSTGRES:
-        with get_pg_connection() as conn:
-            with conn.cursor() as c:
-                c.execute(
-                    'INSERT INTO packages (name, price, category, description) VALUES (%s, %s, %s, %s)',
-                    (name, price, category, description)
-                )
-            conn.commit()
-    else:
-        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-            c = conn.cursor()
-            c.execute(
-                'INSERT INTO packages (name, price, category, description) VALUES (?, ?, ?, ?)',
-                (name, price, category, description)
-            )
-            conn.commit()
-    _clear_cache()
-
-def update_package(package_id: int, name: str, price: float, category: str, description: str) -> None:
-    if USE_POSTGRES:
-        with get_pg_connection() as conn:
-            with conn.cursor() as c:
-                c.execute("""
-                    UPDATE packages
-                    SET name = %s, price = %s, category = %s, description = %s
-                    WHERE id = %s
-                """, (name, price, category, description, package_id))
-            conn.commit()
-    else:
-        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-            c = conn.cursor()
-            c.execute("""
-                UPDATE packages
-                SET name = ?, price = ?, category = ?, description = ?
-                WHERE id = ?
-            """, (name, price, category, description, package_id))
-            conn.commit()
-    _clear_cache()
-
-def delete_package(package_id: int) -> None:
-    if USE_POSTGRES:
-        with get_pg_connection() as conn:
-            with conn.cursor() as c:
-                c.execute('DELETE FROM packages WHERE id = %s', (package_id,))
-            conn.commit()
-    else:
-        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-            c = conn.cursor()
-            c.execute('DELETE FROM packages WHERE id = ?', (package_id,))
-            conn.commit()
-    _clear_cache()
-
-def delete_all_packages() -> None:
-    if USE_POSTGRES:
-        with get_pg_connection() as conn:
-            with conn.cursor() as c:
-                c.execute("TRUNCATE TABLE packages RESTART IDENTITY;")
-            conn.commit()
-    else:
-        with sqlite3.connect(DB_SQLITE, timeout=10) as conn:
-            c = conn.cursor()
-            c.execute("DELETE FROM packages")
-            conn.commit()
-    _clear_cache()
