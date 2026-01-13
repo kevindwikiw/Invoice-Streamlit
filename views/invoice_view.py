@@ -62,13 +62,12 @@ DEFAULT_BANK_INFO = {
     "bank_nm": "OCBC",
     "bank_ac": "693810505794",
     "bank_an": "FANI PUSPITA NINGRUM",
-    "bank_an": "FANI PUSPITA NINGRUM",
 }
 DEFAULT_FOOTER_ITEMS = (
-    "📍 Jl. Panembakan Gg Sukamaju 15 No. 3, Kota Cimahi\n"
-    "📧 theorbitphoto@gmail.com\n"
-    "📸 @theorbitphoto\n"
-    "📞 0813-2333-1506"
+    "Jl. Panembakan Gg Sukamaju 15 No. 3, Kota Cimahi\n"
+    "theorbitphoto@gmail.com\n"
+    "@theorbitphoto\n"
+    "0813-2333-1506"
 )
 
 # --- DB Persistence Helper ---
@@ -83,20 +82,7 @@ def load_db_settings() -> Dict[str, Any]:
         "inv_footer": db.get_config("inv_footer_default", DEFAULT_FOOTER_ITEMS),
     }
 
-
-
 CATALOG_CACHE_TTL_SEC = 300  # 5 min, safe default
-
-
-# ==============================================================================
-# 2) STYLING (CSS)
-# ==============================================================================
-
-# ==============================================================================
-# 2) STYLING (CSS) - Moved to views/styles.py
-# ==============================================================================
-# injected via inject_styles() call
-
 
 # ==============================================================================
 # 3) HELPERS (minimal, no extra imports)
@@ -145,6 +131,14 @@ def initialize_session_state() -> None:
     # Load custom defaults from DB
     db_conf = load_db_settings()
 
+    # Check for reset flags (set by cb_reset_transaction)
+    def get_with_reset_flag(key: str, db_default: Any, fallback: Any = None) -> Any:
+        flag_key = f"_default_{key}"
+        if flag_key in st.session_state:
+            val = st.session_state.pop(flag_key)
+            return val
+        return db_default if db_default is not None else fallback
+
     defaults: Dict[str, Any] = {
         # Cart Data
         "inv_items": [],
@@ -152,7 +146,7 @@ def initialize_session_state() -> None:
         "generated_pdf_bytes": None,
 
         # Invoice Metadata
-        "inv_title": db_conf["title"],
+        "inv_title": get_with_reset_flag("inv_title", db_conf["title"], DEFAULT_INVOICE_TITLE),
         "inv_no": f"INV/{datetime.now().strftime('%m')}/2026",
         "inv_client_name": "",
         "inv_client_phone": "",
@@ -167,12 +161,11 @@ def initialize_session_state() -> None:
         ],
 
         # Configs
-        "inv_terms": db_conf["terms"],
-        "bank_nm": db_conf["bank_nm"],
-        "bank_ac": db_conf["bank_ac"],
-        "bank_ac": db_conf["bank_ac"],
-        "bank_an": db_conf["bank_an"],
-        "inv_footer": db_conf["inv_footer"],
+        "inv_terms": get_with_reset_flag("inv_terms", db_conf["terms"], DEFAULT_TERMS),
+        "bank_nm": get_with_reset_flag("bank_nm", db_conf["bank_nm"], DEFAULT_BANK_INFO["bank_nm"]),
+        "bank_ac": get_with_reset_flag("bank_ac", db_conf["bank_ac"], DEFAULT_BANK_INFO["bank_ac"]),
+        "bank_an": get_with_reset_flag("bank_an", db_conf["bank_an"], DEFAULT_BANK_INFO["bank_an"]),
+        "inv_footer": get_with_reset_flag("inv_footer", db_conf["inv_footer"], DEFAULT_FOOTER_ITEMS),
 
         # UI Filters
         "cat_filter": "All",
@@ -391,28 +384,34 @@ def cb_fill_remaining_payment(grand_total: float) -> None:
 
 def cb_reset_transaction() -> None:
     st.session_state["inv_items"] = []
-    st.session_state["inv_cashback"] = 0
+    # Use pop() for widget-bound keys to avoid "cannot be modified after instantiation" error
+    st.session_state.pop("inv_cashback", None)
     st.session_state["generated_pdf_bytes"] = None
     st.session_state["pp_cached"] = []  # Clear Payment Proofs
     
-    # Clear Metadata
+    # Clear Metadata - use pop() for widget-bound keys
     db_conf = load_db_settings()
-    st.session_state["inv_title"] = db_conf["title"]
+    st.session_state.pop("inv_title", None)
+    st.session_state["_default_inv_title"] = db_conf["title"]
     
-    # Reload Configs (in case user saved new defaults)
-    st.session_state["inv_terms"] = db_conf["terms"]
-    st.session_state["bank_nm"] = db_conf["bank_nm"]
-    st.session_state["bank_ac"] = db_conf["bank_ac"]
-    st.session_state["bank_an"] = db_conf["bank_an"]
-    st.session_state["inv_footer"] = db_conf["inv_footer"]
+    # Reload Configs (in case user saved new defaults) - use pop() for widget-bound
+    st.session_state.pop("inv_terms", None)
+    st.session_state["_default_inv_terms"] = db_conf["terms"]
+    st.session_state.pop("bank_nm", None)
+    st.session_state["_default_bank_nm"] = db_conf["bank_nm"]
+    st.session_state.pop("bank_ac", None)
+    st.session_state["_default_bank_ac"] = db_conf["bank_ac"]
+    st.session_state.pop("bank_an", None)
+    st.session_state["_default_bank_an"] = db_conf["bank_an"]
+    st.session_state.pop("inv_footer", None)
+    st.session_state["_default_inv_footer"] = db_conf["inv_footer"]
 
-    st.session_state["inv_client_name"] = ""
-    st.session_state["inv_client_phone"] = ""
-    st.session_state["inv_client_email"] = ""
-    st.session_state["inv_venue"] = ""
-    st.session_state["inv_wedding_date"] = date.today() + timedelta(days=90)
-    # Default Invoice No (Auto-gen for next ID usually better, here simplistic)
-    st.session_state["inv_no"] = f"INV/{datetime.now().strftime('%m')}/2026"
+    st.session_state.pop("inv_client_name", None)
+    st.session_state.pop("inv_client_phone", None)
+    st.session_state.pop("inv_client_email", None)
+    st.session_state.pop("inv_venue", None)
+    st.session_state.pop("inv_wedding_date", None)
+    st.session_state.pop("inv_no", None)
     
     st.session_state["payment_terms"] = [
         {"id": "dp", "label": "Down Payment", "amount": 0, "locked": True},
@@ -428,8 +427,6 @@ def cb_reset_transaction() -> None:
     # Force refresh to close popover and scroll to top
     st.session_state["nav_key"] = st.session_state.get("nav_key", 0) + 1
     st.session_state["_needs_rerun"] = True
-    
-    st.toast("Form reset! Starting fresh.", icon="🆕")
 
 # --- Bundling callbacks ---
 
@@ -610,7 +607,7 @@ def render_event_metadata() -> None:
     if "_config_exp_key" not in st.session_state:
         st.session_state["_config_exp_key"] = 0
         
-    with st.expander("🏦 Bank, Terms, WhatsApp Config, & Footer", expanded=False):
+    with st.expander("🏦 Bank, Terms, WhatsApp & Footer", expanded=False):
         tab_bank, tab_terms, tab_wa, tab_footer = st.tabs(["🏦 Bank Data", "📜 Terms", "📱 WhatsApp", "📝 Footer"])
         
         with tab_bank:
@@ -646,6 +643,9 @@ ORBIT Team"""
             st.caption("Contact Info (Satu baris per item)")
             if "inv_footer" not in st.session_state:
                  st.session_state["inv_footer"] = db.get_config("inv_footer_default", DEFAULT_FOOTER_ITEMS)
+            # Auto-repair corrupted text (e.g. replacement characters)
+            if "\ufffd" in st.session_state.get("inv_footer", ""):
+                st.session_state["inv_footer"] = DEFAULT_FOOTER_ITEMS
             st.text_area("Footer Text", key="inv_footer", height=120, on_change=invalidate_pdf, label_visibility="collapsed")
         
         st.write("")
@@ -1399,12 +1399,13 @@ def render_download_section() -> None:
         save_col, new_col = st.columns(2)
         
         edit_id = st.session_state.get("editing_invoice_id")
-        save_label = f"💾 Update (#{edit_id})" if edit_id else "💾 Save to History"
+        save_label = f"💾 Update to History" if edit_id else "💾 Save to History"
         
         with save_col:
             # Use body execution (not callback) to ensure payment_terms are synced from widgets
             if st.button(save_label, use_container_width=True):
                 _handle_save_history(inv_no, email_recipient, pdf_bytes)
+                st.rerun()  # Immediate rerun to process redirect flag
                 
         with new_col:
             if st.button("🆕 New Invoice", use_container_width=True):
@@ -1498,11 +1499,13 @@ def render_page() -> None:
     inject_styles()
     
     # Handle redirect after save/update (callback can't call rerun)
+    # Also handles _needs_rerun (for manual reset) - combined to avoid double-click issue
     if st.session_state.get("_redirect_to_history"):
         st.session_state["_redirect_to_history"] = False
+        st.session_state["_needs_rerun"] = False  # Clear this too to avoid extra rerun
         st.rerun()
     
-    # Handle rerun after reset (to close popover)
+    # Handle rerun after reset (to close popover) - only if no redirect pending
     if st.session_state.get("_needs_rerun"):
         st.session_state["_needs_rerun"] = False
         st.rerun()
