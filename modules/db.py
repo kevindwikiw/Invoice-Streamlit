@@ -74,6 +74,10 @@ class DatabaseAdapter(ABC):
         pass
         
     @abstractmethod
+    def search_invoices(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
+        pass
+        
+    @abstractmethod
     def get_invoice_details(self, invoice_id: int) -> Optional[Dict[str, Any]]:
         pass
         
@@ -154,9 +158,15 @@ class SQLiteAdapter(DatabaseAdapter):
                     date TEXT,
                     total_amount REAL,
                     invoice_data TEXT,
+                    pdf_blob BLOB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            # Migration: Add pdf_blob column if missing (for existing DBs)
+            try:
+                c.execute("ALTER TABLE invoices ADD COLUMN pdf_blob BLOB")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
 
     def get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
@@ -179,13 +189,13 @@ class SQLiteAdapter(DatabaseAdapter):
         except Exception as e:
             print(f"[SQLite] set_config failed: {e}")
 
-    def save_invoice(self, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+    def save_invoice(self, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
         with self._connect() as conn:
             c = conn.cursor()
             c.execute("""
-                INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data)
-                VALUES (?, ?, ?, ?, ?)
-            """, (invoice_no, client_name, date_str, total_amount, invoice_data_json))
+                INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data, pdf_blob)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob))
             conn.commit()
 
     def get_invoices(self, limit: int = 50) -> List[Dict[str, Any]]:
@@ -205,6 +215,26 @@ class SQLiteAdapter(DatabaseAdapter):
             print(f"[SQLite] get_invoices failed: {e}")
             return []
 
+    def search_invoices(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
+        # Using simple LIKE search
+        sql = """
+            SELECT id, invoice_no, client_name, date, total_amount, created_at, 
+                   LENGTH(invoice_data) as data_size,
+                   json_extract(invoice_data, '$.meta.client_phone') as client_phone
+            FROM invoices 
+            WHERE invoice_no LIKE ? OR client_name LIKE ?
+            ORDER BY id DESC LIMIT ?
+        """
+        wild = f"%{query}%"
+        try:
+            with self._connect() as conn:
+                c = conn.cursor()
+                c.execute(sql, (wild, wild, limit))
+                return [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            print(f"[SQLite] search_invoices failed: {e}")
+            return []
+
     def get_invoice_details(self, invoice_id: int) -> Optional[Dict[str, Any]]:
         try:
             with self._connect() as conn:
@@ -215,14 +245,14 @@ class SQLiteAdapter(DatabaseAdapter):
         except Exception:
             return None
 
-    def update_invoice(self, invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+    def update_invoice(self, invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
         with self._connect() as conn:
             c = conn.cursor()
             c.execute("""
                 UPDATE invoices
-                SET invoice_no=?, client_name=?, date=?, total_amount=?, invoice_data=?
+                SET invoice_no=?, client_name=?, date=?, total_amount=?, invoice_data=?, pdf_blob=?
                 WHERE id=?
-            """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, invoice_id))
+            """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob, invoice_id))
             conn.commit()
 
     def delete_invoice(self, invoice_id: int) -> None:
@@ -328,9 +358,15 @@ class PostgresAdapter(DatabaseAdapter):
                             date TEXT,
                             total_amount REAL,
                             invoice_data TEXT,
+                            pdf_blob BYTEA,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                         );
                     ''')
+                    # Migration: Add pdf_blob column if missing
+                    try:
+                        c.execute("ALTER TABLE invoices ADD COLUMN pdf_blob BYTEA")
+                    except Exception:
+                        pass  # Column likely exists
                 conn.commit()
                 print("[DB] Postgres Schema initialized.")
         except Exception as e:
@@ -359,13 +395,13 @@ class PostgresAdapter(DatabaseAdapter):
         except Exception as e:
             print(f"[Postgres] set_config failed: {e}")
 
-    def save_invoice(self, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+    def save_invoice(self, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
         with self._connect() as conn:
             with conn.cursor() as c:
                 c.execute("""
-                    INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json))
+                    INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data, pdf_blob)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob))
             conn.commit()
 
     def get_invoices(self, limit: int = 50) -> List[Dict[str, Any]]:
@@ -394,14 +430,14 @@ class PostgresAdapter(DatabaseAdapter):
         except Exception:
             return None
 
-    def update_invoice(self, invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
+    def update_invoice(self, invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
         with self._connect() as conn:
             with conn.cursor() as c:
                 c.execute("""
                     UPDATE invoices 
-                    SET invoice_no=%s, client_name=%s, date=%s, total_amount=%s, invoice_data=%s
+                    SET invoice_no=%s, client_name=%s, date=%s, total_amount=%s, invoice_data=%s, pdf_blob=%s
                     WHERE id=%s
-                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, invoice_id))
+                """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob, invoice_id))
             conn.commit()
 
     def delete_invoice(self, invoice_id: int) -> None:
@@ -490,8 +526,8 @@ def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
 def set_config(key: str, value: str) -> None:
     current_db.set_config(key, value)
 
-def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
-    current_db.save_invoice(invoice_no, client_name, date_str, total_amount, invoice_data_json)
+def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
+    current_db.save_invoice(invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob)
 
 def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
     return current_db.get_invoices(limit)
@@ -499,8 +535,8 @@ def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
 def get_invoice_details(invoice_id: int) -> Optional[Dict[str, Any]]:
     return current_db.get_invoice_details(invoice_id)
 
-def update_invoice(invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str) -> None:
-    current_db.update_invoice(invoice_id, invoice_no, client_name, date_str, total_amount, invoice_data_json)
+def update_invoice(invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
+    current_db.update_invoice(invoice_id, invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob)
 
 def delete_invoice(invoice_id: int) -> None:
     current_db.delete_invoice(invoice_id)
