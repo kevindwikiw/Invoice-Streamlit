@@ -11,7 +11,7 @@ import extra_streamlit_components as stx
 
 # Internal UI components
 try:
-    from ui.components import danger_container
+    from views.styles import danger_container
 except ImportError:
     danger_container = None
 
