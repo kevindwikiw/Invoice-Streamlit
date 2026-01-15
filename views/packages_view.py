@@ -1,6 +1,6 @@
 import streamlit as st
 from modules import db
-from ui.components import page_header, section, danger_container
+from views.styles import page_header, section, danger_container
 from ui.formatters import rupiah
 from views.styles import inject_styles
 
@@ -191,6 +191,7 @@ def show_add_dialog():
             return
 
         st.toast("Package created!", icon="✅")
+        st.cache_data.clear()
         st.rerun()
 
 
@@ -214,6 +215,7 @@ def show_edit_dialog(row_data: dict):
             return
 
         st.toast("Saved!", icon="💾")
+        st.cache_data.clear()
         st.rerun()
 
 
@@ -250,6 +252,7 @@ def show_delete_dialog(row_data: dict):
                     return
 
                 st.toast("Deleted.", icon="🗑️")
+                st.cache_data.clear()
                 st.rerun()
 
 
@@ -294,40 +297,20 @@ def _render_grid(data: list, cols_count: int, page_size: int = PAGE_SIZE_DEFAULT
     for idx, row in enumerate(page_data):
         with cols[idx % cols_count]:
             is_main = (row['category'] == CATEGORIES[0])
-            bg_color, txt_color = ("#e8f5e9", "#15803d") if is_main else ("#fff7ed", "#c2410c")
-            badge_text = "MAIN" if is_main else "ADD-ON"
-
-            preview_html, more, full_lines = _desc_meta(row['description'], max_lines=DESC_PREVIEW_LINES)
+            # Use reusable component
+            from views.styles import render_package_card
             
-            # Build tooltip for hover (same as invoice_view)
-            tooltip_html = ""
-            if full_lines and more > 0:
-                full_html = "".join([f"<div>• {ln}</div>" for ln in full_lines])
-                tooltip_html = (
-                    "<div class='tip'><b>📋 Full Details</b>"
-                    f"<div style='margin-top:6px;'>{full_html}</div></div>"
-                )
-
-            # Description preview
-            if preview_html:
-                desc_display = preview_html.replace("\n", "<br/>")
-            else:
-                desc_display = "No details."
-                
-            more_text = f"<div style='color:#3b82f6; font-size:.75rem; margin-top:4px;'>+{more} more…</div>" if more > 0 else ""
-
-            st.markdown(
-                f"""
-                <div class="card" style="border:1px solid #f3f4f6;">
-                  <span class="pill" style="background:{bg_color}; color:{txt_color};">{badge_text}</span>
-                  <div class="title">{row['name']}</div>
-                  <div class="price">{rupiah(row['price'])}</div>
-                  <div class="desc">{desc_display}{more_text}</div>
-                  {tooltip_html}
-                </div>
-                """,
-                unsafe_allow_html=True,
+            card_html = render_package_card(
+                name=row['name'],
+                price=row['price'],
+                description=row['description'],
+                category=row['category'],
+                is_main=is_main,
+                compact=False,
+                rupiah_formatter=rupiah
             )
+
+            st.markdown(card_html, unsafe_allow_html=True)
 
             # Action Buttons (Edit / Delete)
             a1, a2 = st.columns([1, 1])
