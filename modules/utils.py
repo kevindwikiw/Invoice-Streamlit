@@ -125,3 +125,8 @@ def image_to_base64(uploaded_file) -> str:
              return base64.b64encode(uploaded_file.getvalue()).decode()
         except:
              return ""
+
+def rupiah(value: Any) -> str:
+    """Formats number as Indonesian Rupiah (e.g. Rp 1.000.000)."""
+    val = safe_float(value)
+    return f"Rp {val:,.0f}".replace(",", ".")
