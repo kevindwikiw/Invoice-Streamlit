@@ -420,6 +420,25 @@ class PostgresAdapter(DatabaseAdapter):
             print(f"[Postgres] get_invoices failed: {e}")
             return []
 
+    def search_invoices(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
+        sql = """
+            SELECT id, invoice_no, client_name, date, total_amount, created_at, 
+                   LENGTH(invoice_data) as data_size,
+                   invoice_data::json->'meta'->>'client_phone' as client_phone
+            FROM invoices 
+            WHERE invoice_no ILIKE %s OR client_name ILIKE %s
+            ORDER BY id DESC LIMIT %s
+        """
+        wild = f"%{query}%"
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(sql, (wild, wild, limit))
+                    return [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            print(f"[Postgres] search_invoices failed: {e}")
+            return []
+
     def get_invoice_details(self, invoice_id: int) -> Optional[Dict[str, Any]]:
         try:
             with self._connect() as conn:
