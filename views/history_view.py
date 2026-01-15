@@ -3,26 +3,32 @@ import streamlit as st
 from datetime import datetime
 from typing import Optional
 
-from modules import db, invoice as invoice_mod
+from modules import db
 from modules.utils import make_safe_filename
-from ui.components import page_header
+from views.styles import page_header, inject_styles
 from ui.formatters import rupiah
-from views.styles import inject_styles
 
 
 # Removed cache to ensure updates are reflected immediately
 def _get_invoice_pdf(invoice_id: int) -> Optional[bytes]:
-    """Generate PDF from stored invoice data (cached for 5 min)."""
+    """Get PDF from stored blob, or regenerate if missing (for old invoices)."""
     try:
         detail = db.get_invoice_details(invoice_id)
         if not detail:
             return None
         
+        # 1. Try to use stored PDF blob (instant)
+        pdf_blob = detail.get("pdf_blob")
+        if pdf_blob:
+            return bytes(pdf_blob) if not isinstance(pdf_blob, bytes) else pdf_blob
+        
+        # 2. Fallback: Regenerate from JSON (for old invoices without blob)
         payload = json.loads(detail["invoice_data"])
         meta = payload.get("meta", {})
         items = payload.get("items", [])
         grand_total = payload.get("grand_total", 0)
         
+        from modules import invoice as invoice_mod
         pdf_bytes = invoice_mod.generate_pdf_bytes(meta, items, grand_total)
         
         if hasattr(pdf_bytes, 'read'):
@@ -31,6 +37,20 @@ def _get_invoice_pdf(invoice_id: int) -> Optional[bytes]:
         return pdf_bytes
     except Exception:
         return None
+
+@st.dialog("⚠️ Confirm Deletion")
+def _handle_delete_dialog(invoice_id: int, invoice_no: str):
+    st.warning(f"Are you sure you want to delete **{invoice_no}**?")
+    st.write("This action cannot be undone.")
+    
+    col_can, col_del = st.columns(2)
+    if col_can.button("Cancel", key=f"d_can_{invoice_id}", use_container_width=True):
+        st.rerun()
+        
+    if col_del.button("Yes, Delete", key=f"d_yes_{invoice_id}", type="primary", use_container_width=True):
+        db.delete_invoice(invoice_id)
+        st.toast("Invoice deleted.", icon="🗑️")
+        st.rerun()
 
 @st.dialog("📤 Kirim via WhatsApp")
 def open_wa_dialog(wa_url: str):
@@ -54,20 +74,14 @@ def render_page():
         st.write("")  # Spacer
 
     # --- Load Data ---
-    raw_invoices = db.get_invoices(limit=limit)
+    if search_q:
+        invoices = db.search_invoices(search_q, limit=limit)
+    else:
+        invoices = db.get_invoices(limit=limit)
     
-    if not raw_invoices:
+    if not invoices:
         st.info("📭 No invoices found. Start by creating your first invoice!")
         return
-
-    # Filter
-    if search_q:
-        q = search_q.lower()
-        invoices = [inv for inv in raw_invoices 
-                    if q in str(inv.get("invoice_no", "")).lower() 
-                    or q in str(inv.get("client_name", "")).lower()]
-    else:
-        invoices = raw_invoices
 
     # --- Stats Bar ---
     total_revenue = sum(inv.get("total_amount", 0) for inv in invoices)
@@ -79,7 +93,7 @@ def render_page():
                 <div style="font-size:1.25rem; font-weight:800; color:#0f172a;">{len(invoices)}</div>
             </div>
             <div>
-                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Total Revenue</div>
+                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Revenue (Shown)</div>
                 <div style="font-size:1.25rem; font-weight:800; color:#16a34a;">{rupiah(total_revenue)}</div>
             </div>
         </div>
@@ -129,35 +143,26 @@ def render_page():
                 st.markdown(f"<div style='text-align:right; font-weight:700; color:#0f172a;'>{rupiah(total)}</div>", unsafe_allow_html=True)
             
             with c5:
-                btn1, btn2, btn3, btn4 = st.columns(4)
-                with btn1:
-                    if st.button("✏️", key=f"ed_{inv_id}", help="Edit"):
+                # Optimized: Use Popover to prevent vertical stacking on mobile
+                with st.popover("⚙️", use_container_width=True):
+                    # Edit
+                    if st.button("✏️ Edit Invoice", key=f"ed_{inv_id}", use_container_width=True):
                         _handle_edit(inv_id)
-                with btn2:
-                    # Direct download - generate PDF and provide download button
-                    pdf_data = _get_invoice_pdf(inv_id)
-                    if pdf_data:
-                        st.download_button(
-                            "📥", 
-                            data=pdf_data, 
-                            file_name=f"{make_safe_filename(inv_no)}.pdf",
-                            mime="application/pdf",
-                            key=f"dl_{inv_id}",
-                            help="Download PDF"
-                        )
-                    else:
-                        st.button("📥", key=f"dl_err_{inv_id}", disabled=True, help="PDF Error")
-                with btn3:
-                     # WhatsApp Share
-                     phone_raw = inv.get("client_phone")
-                     if phone_raw:
-                         # Sanitize
-                         import re
-                         safe_phone = re.sub(r"[^0-9]", "", str(phone_raw))
-                         if safe_phone.startswith("0"): safe_phone = "62" + safe_phone[1:]
-                         
-                         # Get Template
-                         default_tpl = """Halo Kak {nama}!
+                    
+                    # PDF
+                    if st.button("📄 Generate PDF", key=f"gen_{inv_id}", use_container_width=True):
+                        _handle_reprint(inv_id)
+                        
+                    # WhatsApp Share
+                    phone_raw = inv.get("client_phone")
+                    if phone_raw:
+                        # Sanitize
+                        import re
+                        safe_phone = re.sub(r"[^0-9]", "", str(phone_raw))
+                        if safe_phone.startswith("0"): safe_phone = "62" + safe_phone[1:]
+                        
+                        # Get Template
+                        default_tpl = """Halo Kak {nama}!
 
 Terima kasih sudah mempercayakan momen spesial Anda kepada kami.
 
@@ -168,39 +173,19 @@ Silakan cek file invoice yang sudah kami kirimkan ya. Jika ada pertanyaan, janga
 
 Warm regards,
 ORBIT Team"""
-                         tpl = db.get_config("wa_template_default") or default_tpl
-                         msg = tpl.replace("{nama}", client).replace("{inv_no}", inv_no)
-                         
-                         import urllib.parse
-                         encoded_msg = urllib.parse.quote(msg)
-                         
-                         if safe_phone:
-                             wa_url = f"https://wa.me/{safe_phone}?text={encoded_msg}"
-                         else:
-                             wa_url = f"https://api.whatsapp.com/send?text={encoded_msg}"
-                             
-                         if st.button("📱", key=f"wa_{inv_id}", help="Share WhatsApp"):
-                             open_wa_dialog(wa_url)
-                     else:
-                         st.button("📱", key=f"wa_dis_{inv_id}", disabled=True, help="No Phone Found")
-
-                with btn4:
-                    if st.button("🗑️", key=f"del_{inv_id}", help="Delete"):
-                        st.session_state[f"confirm_del_{inv_id}"] = True
-
-            # Delete confirmation
-            if st.session_state.get(f"confirm_del_{inv_id}"):
-                with st.container():
-                    st.warning(f"Delete {inv_no}?")
-                    dc1, dc2 = st.columns(2)
-                    if dc1.button("Cancel", key=f"cancel_{inv_id}"):
-                        st.session_state[f"confirm_del_{inv_id}"] = False
-                        st.rerun()
-                    if dc2.button("Yes, Delete", key=f"confirm_{inv_id}", type="primary"):
-                        db.delete_invoice(inv_id)
-                        st.session_state[f"confirm_del_{inv_id}"] = False
-                        st.toast("Invoice deleted.", icon="🗑️")
-                        st.rerun()
+                        tpl = db.get_config("wa_template_default") or default_tpl
+                        msg = tpl.replace("{nama}", client).replace("{inv_no}", inv_no)
+                        
+                        import urllib.parse
+                        encoded_msg = urllib.parse.quote(msg)
+                        
+                        if safe_phone:
+                            wa_url = f"https://wa.me/{safe_phone}?text={encoded_msg}"
+                        else:
+                            wa_url = f"https://api.whatsapp.com/send?text={encoded_msg}"
+                            
+                    if st.button("🗑️ Delete", key=f"del_{inv_id}", type="primary", use_container_width=True):
+                         _handle_delete_dialog(inv_id, inv_no)
 
             st.markdown("<hr style='margin:4px 0; border:none; border-top:1px solid #e2e8f0;'>", unsafe_allow_html=True)
 
@@ -278,30 +263,104 @@ def _handle_edit(invoice_id: int):
         st.error(f"Failed to load: {e}")
 
 
+@st.dialog("📄 Invoice Options")
 def _handle_reprint(invoice_id: int):
-    """Regenerates PDF and shows download button."""
+    """Shows PDF options using stored blob or regenerating if needed."""
+    # 1. Fetch Data
     detail = db.get_invoice_details(invoice_id)
     if not detail:
         st.error("Invoice not found.")
         return
-
+    
+    # Parse metadata for display
     try:
         payload = json.loads(detail["invoice_data"])
         meta = payload.get("meta", {})
-        items = payload.get("items", [])
-        grand_total = payload.get("grand_total", 0)
+    except:
+        meta = {}
+
+    # 2. Get PDF (from blob or regenerate)
+    pdf_bytes = None
+    pdf_blob = detail.get("pdf_blob")
+    
+    if pdf_blob:
+        # Instant: Use stored PDF
+        pdf_bytes = bytes(pdf_blob) if not isinstance(pdf_blob, bytes) else pdf_blob
+    else:
+        # Fallback: Regenerate for old invoices
+        with st.spinner("Generating PDF..."):
+            try:
+                items = payload.get("items", [])
+                grand_total = payload.get("grand_total", 0)
+                
+                from modules import invoice as invoice_mod
+                pdf_bytes = invoice_mod.generate_pdf_bytes(meta, items, grand_total)
+                
+                if hasattr(pdf_bytes, 'read'):
+                    pdf_bytes.seek(0)
+                    pdf_bytes = pdf_bytes.read()
+            except Exception as e:
+                st.error(f"Generation failed: {e}")
+                return
+
+    # 3. Actions UI
+    if pdf_bytes:
+        inv_no_safe = make_safe_filename(meta.get("inv_no", "invoice"))
         
-        pdf_bytes = invoice_mod.generate_pdf_bytes(meta, items, grand_total)
+        st.success("✅ PDF Ready!")
+        st.write("")
         
-        if pdf_bytes:
-            inv_no_safe = make_safe_filename(meta.get("inv_no", "invoice"))
+        col_dl, col_wa = st.columns(2)
+        
+        with col_dl:
             st.download_button(
-                label=f"📥 Download {inv_no_safe}.pdf",
+                label="📥 Download PDF",
                 data=pdf_bytes,
                 file_name=f"{inv_no_safe}.pdf",
                 mime="application/pdf",
-                key=f"dl_{invoice_id}"
+                key=f"dl_modal_{invoice_id}",
+                type="primary",
+                use_container_width=True
             )
             
-    except Exception as e:
-        st.error(f"PDF generation failed: {e}")
+        with col_wa:
+            # WhatsApp Logic in Dialog
+            phone_raw = meta.get("client_phone") or detail.get("client_phone")
+            
+            if phone_raw:
+                import re
+                import urllib.parse
+                
+                # Sanitize
+                safe_phone = re.sub(r"[^0-9]", "", str(phone_raw))
+                if safe_phone.startswith("0"): safe_phone = "62" + safe_phone[1:]
+                
+                # Template
+                default_tpl = """Halo Kak {nama}!
+
+Terima kasih sudah mempercayakan momen spesial Anda kepada kami.
+
+Berikut detail invoice Anda:
+Invoice: {inv_no}
+
+Silakan cek file invoice yang sudah kami kirimkan ya. Jika ada pertanyaan, jangan ragu untuk menghubungi kami.
+
+Warm regards,
+ORBIT Team"""
+                tpl = db.get_config("wa_template_default") or default_tpl
+                msg = tpl.replace("{nama}", meta.get("client_name", "Kak")).replace("{inv_no}", meta.get("inv_no", "-"))
+                
+                encoded_msg = urllib.parse.quote(msg)
+                
+                if safe_phone:
+                    wa_url = f"https://wa.me/{safe_phone}?text={encoded_msg}"
+                else:
+                    wa_url = f"https://api.whatsapp.com/send?text={encoded_msg}"
+                    
+                if st.button("📱 WhatsApp", key=f"wa_modal_{invoice_id}", use_container_width=True):
+                    open_wa_dialog(wa_url)
+            else:
+                st.button("📱 WhatsApp (No Number)", key=f"wa_modal_dis_{invoice_id}", disabled=True, use_container_width=True)
+        
+        st.write("")
+        st.caption("Press Esc to close.")
