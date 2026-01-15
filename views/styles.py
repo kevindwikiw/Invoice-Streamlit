@@ -1,7 +1,7 @@
 import streamlit as st
 from typing import List
 
-POS_COLUMN_RATIOS = [2.4, 0.6, 2, 0.7]  # Description | Qty | Total | Del
+POS_COLUMN_RATIOS = [2.2, 0.8, 0.6, 1.2, 0.5]  # Description | Price | Qty | Total | Del
 
 def _pos_grid_template(ratios: List[float]) -> str:
     return " ".join([f"{r}fr" for r in ratios])
@@ -21,8 +21,29 @@ def get_invoice_css() -> str:
     }}
     .status-title {{ font-weight:900; color:#111827; font-size:.85rem; letter-spacing:.01em; }}
     .status-right {{ display:flex; align-items:center; gap:8px; }}
+    
+    /* Mobile Responsive Utilities */
+    @media (max-width: 640px) {{
+        .mobile-hidden {{ display: none !important; }}
+        .desktop-hidden {{ display: block !important; }}
+    }}
+    
+    .sidebar-header h3 {{
+        font-size: 1rem !important;
+        font-weight: 700 !important;
+        color: #1f2937 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    .sidebar-header {{
+        margin-bottom: 12px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #f3f4f6;
+    }}
 
     /* --- ISO COMPONENTS (Cards & Badges) --- */
+    /* --- UNIFIED CARD COMPONENT --- */
+    /* --- UNIFIED CARD COMPONENT --- */
     .iso-card {{
         background-color: white;
         border: 1px solid #e5e7eb;
@@ -36,194 +57,307 @@ def get_invoice_css() -> str:
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         border-color: #d1d5db;
     }}
-    .iso-row {{
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-    }}
-    .iso-meta {{
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-        color: #6b7280;
-        font-size: 0.85rem;
-    }}
-    .iso-badg {{
-         display: inline-flex;
-         align-items: center;
-         padding: 2px 8px;
-         border-radius: 999px;
-         font-size: 0.7rem;
-         font-weight: 600;
-         text-transform: uppercase;
-         letter-spacing: 0.05em;
-    }}
-    .badg-green {{ background: #dcfce7; color: #166534; }}
-    .badg-orange {{ background: #ffedd5; color: #9a3412; }}
-    .badg-red {{ background: #fee2e2; color: #991b1b; }}
-    .badg-blue {{ background: #eef2ff; color: #3730a3; }}
 
-    /* --- SECTION TITLES --- */
-    .blk-title {{
-        font-size:1.02rem; font-weight:900; color:#111827;
-        line-height:1.2; margin:0 0 10px 0;
-    }}
-    .blk-sub {{ font-size:.82rem; color:#6b7280; margin-top:-6px; margin-bottom:10px; }}
-
-    /* --- CATALOG CARD --- */
-    .card {{
-        background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:14px;
-        transition:.15s ease; position:relative; height:100%;
-        overflow: visible;
-    }}
-    .card:hover {{ border-color:#cbd5e1; box-shadow:0 10px 22px rgba(0,0,0,.07); transform:translateY(-2px); }}
-    .title {{ font-weight:900; font-size:.95rem; color:#111827; line-height:1.25; margin-top:6px; }}
-    .price {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight:900; color:#2563eb; margin-top:2px; }}
-    .desc {{
-        font-size:.82rem; color:#6b7280; margin-top:6px; line-height:1.45;
-        display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:36px;
-    }}
-    .tip {{
-        display:none; position:absolute; left:0; right:0; bottom:100%;
-        background:#fff; border:1px solid #e5e7eb; border-radius:14px; padding:12px;
-        box-shadow:0 14px 30px rgba(0,0,0,.12); z-index:30; margin-bottom:10px; font-size:.82rem;
-    }}
-    .card:hover .tip {{ display:block; }}
-
-    /* --- POS TABLE --- */
-    .pos-head {{
-        display:grid; grid-template-columns:{grid};
-        gap:10px; align-items:center; font-size:.72rem; font-weight:900; color:#9ca3af;
-        text-transform:uppercase; letter-spacing:.05em; padding:0 0 10px 0;
-        border-bottom:1px solid #eee; margin-bottom:8px;
-    }}
-    .row {{ border-bottom:1px solid #f3f4f6; padding:10px 0; }}
-    .it {{ font-weight:900; color:#111827; font-size:.92rem; line-height:1.25; }}
-    .meta {{ font-size:.78rem; color:#9ca3af; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
-    .tot {{ text-align:right; font-variant-numeric: tabular-nums; font-weight:950; color:#111827; font-size:1.02rem; }}
-
-    /* --- GRAND TOTAL BOX --- */
-    .grand {{
-        background:#f9fafb; border:1px solid rgba(0,0,0,.06); border-radius:14px;
-        padding:14px; text-align:right; margin-top:12px;
-    }}
-    .grand .lbl {{ font-size:.75rem; font-weight:900; color:#6b7280; text-transform:uppercase; letter-spacing:.05em; }}
-    .grand .val {{ font-size:1.65rem; font-weight:950; color:#111827; margin-top:2px; }}
-
-    /* --- WIDGET OVERRIDES --- */
-    div[data-testid="stNumberInput"] {{ min-width:0!important; width:100%!important; }}
-    div[data-testid="stNumberInput"] input {{ height:2.1rem!important; text-align:center; font-weight:800; padding:0 .25rem!important; }}
-    div[data-testid="stButton"] button {{ padding:.28rem .55rem; min-height:0; }}
-
-    /* --- PACKAGE MINI CARD (packages_view) --- */
-    .mini-card {{
+    /* Base Card (Catalog & Sidebar) */
+    .pkg-card {{
         background: #fff;
         border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 16px;
-        position: relative;
+        border-radius: 12px;
+        padding: 14px;
         transition: all 0.2s ease;
+        position: relative;
         height: 100%;
     }}
-    .mini-card:hover {{
+    .pkg-card:hover {{
         border-color: #cbd5e1;
         box-shadow: 0 8px 20px rgba(0,0,0,0.08);
         transform: translateY(-2px);
     }}
-    .card-topbar {{
-        display: flex;
-        align-items: center;
-        margin-bottom: 8px;
+    
+    /* State: Added */
+    .pkg-card.added {{
+        background: #f0fdf4;
+        border-color: #86efac;
     }}
-    .mini-title {{
-        font-weight: 900;
+    .pkg-card.added:hover {{
+        border-color: #4ade80;
+    }}
+
+    /* Variant: Compact (Sidebar) */
+    /* Variant: Compact (Sidebar) */
+    .pkg-card.compact {{
+        padding: 6px 0;
+        margin: 4px 0;
+        border-radius: 0;
+        box-shadow: none !important;
+        background: transparent !important;
+        border: none !important;
+        border-bottom: 1px solid #f3f4f6 !important;
+    }}
+    .pkg-card.compact:hover {{
+        background: transparent !important;
+        box-shadow: none !important;
+        /* opacity: 0.8; REMOVED to prevent tooltip transparency/ghosting */
+    }}
+    
+    /* FIX: Restore Green Background for Added items (Universal) */
+    .pkg-card.added {{
+        background: #f0fdf4 !important;
+        border: 1px solid #10b981 !important; /* Full border for grid cards */
+    }}
+    
+    /* Specific overrides for Sidebar (Compact) */
+    .pkg-card.compact.added {{
+        border: 1px solid #e5e7eb !important; /* Reset full border */
+        border-left: 3px solid #10b981 !important; /* Left accent only */
+        border-bottom: 1px solid #10b981 !important; 
+        padding-left: 10px; 
+        margin-left: -5px;
+    }}
+
+    /* Elements */
+    .pkg-title {{
+        font-weight: 700;
         font-size: 0.95rem;
-        color: #111827;
+        color: #1f2937;
         line-height: 1.3;
         margin-bottom: 4px;
     }}
-    .mini-price {{
+    .pkg-price {{
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-weight: 900;
-        font-size: 1.05rem;
-        color: #2563eb;
-        margin-bottom: 10px;
+        font-weight: 700;
+        font-size: 0.9rem;
+        color: #059669;
+        margin-bottom: 6px;
     }}
-    .mini-body {{
-        font-size: 0.82rem;
+    /* Tooltip/Popover CSS for Sidebar Description */
+    .pkg-desc {{
+        font-size: 0.78rem;
         color: #6b7280;
-        line-height: 1.5;
-        min-height: 60px;
+        line-height: 1.4;
+        position: relative;
+        /* Default state: Clamped */
+        height: 2.8em; 
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        background: white;
+        transition: height 0.2s, box-shadow 0.2s;
     }}
-    .mini-muted {{
-        color: #9ca3af;
-        font-size: 0.8rem;
-        font-style: italic;
+    
+    /* Strict Sidebar Height */
+    .pkg-card.compact .pkg-desc {{
+        font-size: 0.75rem;
+        height: 2.8em; /* Force fixed height */
+        -webkit-line-clamp: 2;
+        pointer-events: none; /* KILL NATIVE BROWSER TOOLTIP */
     }}
-    .badge {{
-        display: inline-flex;
-        align-items: center;
+    
+    /* HOVER STATE: Expand over content */
+    /* We target the specific card hover */
+    /* REMOVED .pkg-card.compact:hover .pkg-desc to avoid double hover effect.
+       We rely solely on .pkg-tip (Rich Tooltip) now. */ 
+    
+    /* Ensure card container doesn't clip */
+    .pkg-card.compact {{ overflow: visible !important; }}
+
+    /* Badges / Pills */
+    .pkg-pill {{
+        font-size: 0.65rem;
+        font-weight: 800;
         padding: 2px 8px;
         border-radius: 999px;
-        font-size: 0.65rem;
-        font-weight: 700;
+        display: inline-block;
+        margin-bottom: 6px;
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }}
-    .badge-main {{
-        background: #dbeafe;
-        color: #1e40af;
-    }}
-    .badge-addon {{
-        background: #fef3c7;
-        color: #92400e;
-    }}
-    .desc-clamp {{
-        display: -webkit-box;
-        -webkit-line-clamp: 3;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
-    }}
-    .desc-more {{
-        color: #3b82f6;
+    .pkg-pill.main {{ background: #e8f5e9; color: #15803d; }}
+    .pkg-pill.addon {{ background: #fff7ed; color: #c2410c; }}
+    
+    .pkg-badge-added {{
         font-size: 0.75rem;
-        font-weight: 600;
-        margin-top: 4px;
-        cursor: default;
+        color: #10b981;
+        font-weight: 700;
+        margin-left: 6px;
     }}
-    .desc-tooltip {{
+
+    /* Tooltips */
+    .pkg-tip {{
         display: none;
         position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 100%;
+        left: 0; right: 0; bottom: 100%;
         background: #fff;
         border: 1px solid #e5e7eb;
         border-radius: 12px;
         padding: 12px;
-        box-shadow: 0 12px 28px rgba(0,0,0,0.12);
-        z-index: 30;
-        margin-bottom: 8px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        z-index: 50;
+        margin-bottom: 10px;
         font-size: 0.8rem;
-        color: #374151;
+        color: #4b5563;
     }}
-    .mini-card:hover .desc-tooltip {{
-        display: block;
+    .pkg-card:hover .pkg-tip {{ display: block; }}
+    
+    /* Sidebar Specific Headers */
+    .sidebar-header {{
+        padding: 0.75rem 0;
+        border-bottom: 2px solid #e2e8f0;
+        margin-bottom: 1rem;
     }}
-    .desc-tooltip-title {{
-        font-weight: 800;
-        font-size: 0.75rem;
-        color: #111827;
-        margin-bottom: 6px;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
+    .sidebar-header h3 {{
+        margin: 0; font-size: 1.1rem; color: #1f2937; font-weight: 600;
     }}
-    .desc-tooltip-line {{
-        margin-bottom: 2px;
-    }}
-    .card-actions-gap {{
-        height: 8px;
+    .sidebar-category {{
+        font-size: 0.75rem; font-weight: 700; color: #9ca3af;
+        text-transform: uppercase; letter-spacing: 0.08em;
+        margin: 1.25rem 0 0.5rem 0; padding-bottom: 0.3rem;
+        border-bottom: 1px solid #e5e7eb;
     }}
     </style>
     """
 
 def inject_styles() -> None:
     st.markdown(get_invoice_css(), unsafe_allow_html=True)
+
+
+# ==============================================================================
+# UI COMPONENTS (Moved from ui/components.py)
+# ==============================================================================
+import html
+import textwrap
+from contextlib import contextmanager
+from typing import Optional
+
+def _next_key(prefix: str) -> str:
+    """Generate a unique key per session (anti duplicate key)."""
+    st.session_state.setdefault("_ui_seq", 0)
+    st.session_state["_ui_seq"] += 1
+    return f"{prefix}_{st.session_state['_ui_seq']}"
+
+
+def page_header(title: str, subtitle: str | None = None):
+    """Consistent page title + subtitle (match theme.py)."""
+    st.markdown(f"<h1 class='page-title'>{title}</h1>", unsafe_allow_html=True)
+    if subtitle:
+        st.markdown(f"<div class='page-subtitle'>{subtitle}</div>", unsafe_allow_html=True)
+
+
+def section(title: str):
+    st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
+
+
+def col_header(text: str):
+    st.markdown(f"<div class='col-header'>{text}</div>", unsafe_allow_html=True)
+
+
+def danger_container(key: Optional[str] = None):
+    """
+    Container wrapper untuk styling tombol danger.
+    Key otomatis unik biar nggak StreamlitDuplicateElementKey.
+    Theme kamu target selector data-key^="danger".
+    """
+    if not key:
+        key = _next_key("danger")
+    if not str(key).startswith("danger"):
+        key = f"danger_{key}"
+    return st.container(key=key)
+
+
+@contextmanager
+def muted_container():
+    with st.container():
+        st.markdown("<div style='color: var(--muted)'>", unsafe_allow_html=True)
+        try:
+            yield
+        finally:
+            st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_package_card(
+    name: str,
+    price: float,
+    description: str | list = "",
+    category: str = "",
+    is_added: bool = False,
+    is_main: bool = False,
+    compact: bool = False,
+    desc_max_lines: int = 2,
+    rupiah_formatter=None
+) -> str:
+    """
+    Generates HTML for a package card.
+    Supports description as String (legacy) or List (bullets).
+    """
+    
+    # Safe text
+    safe_name = html.escape(str(name or "Unnamed"))
+    
+    # Handle Description (List vs String)
+    if isinstance(description, list):
+        # Join with bullets for display
+        desc_text_for_title = "\n".join([f"• {line}" for line in description if line.strip()]) # For Title Attribute
+        # Use HTML bullet for cleaner look
+        safe_desc = "<br>".join([f"• {html.escape(line)}" for line in description if line.strip()])
+    else:
+        desc_text = str(description or "")
+        desc_text_for_title = desc_text
+        safe_desc = html.escape(desc_text).replace("\n", "<br>")
+    
+    # Price formatting
+    price_str = rupiah_formatter(price) if rupiah_formatter else f"Rp {price:,.0f}".replace(",", ".")
+    
+    # Classes
+    card_classes = ["pkg-card"]
+    if compact:
+        card_classes.append("compact")
+    if is_added:
+        card_classes.append("added")
+        
+    class_str = " ".join(card_classes)
+    
+    # Pill (only if not compact)
+    pill_html = ""
+    if not compact and category:
+        pill_class = "main" if is_main else "addon"
+        pill_html = f'<span class="pkg-pill {pill_class}">{html.escape(category)}</span>'
+        
+    # Added Badge (inline in title)
+    badge_html = ""
+    if is_added:
+        badge_html = '<span class="pkg-badge-added">✓ Added</span>'
+        
+    # Description Logic
+    # 1. Compact View (Sidebar): Fixed 2 lines.
+    # 2. Tooltip: Hovering card shows full details in a nice bubble above.
+    
+    # Native title backup (simple) - Removed to rely on pointer-events:none
+    # desc_html = f'<div class="pkg-desc" title="">{safe_desc}</div>'
+    desc_html = f'<div class="pkg-desc">{safe_desc}</div>'
+
+    # Rich HTML Tooltip (The "Best Hover")
+    # Positioned by CSS .pkg-tip (bottom: 100% -> appears above card)
+    tooltip_html = ""
+    if safe_desc:
+        tooltip_inner = f"""
+            <div class="pkg-tip">
+                <div style="font-weight:700; margin-bottom:4px; color:#1f2937;">📋 Details</div>
+                {safe_desc.replace(chr(10), "<br>• ")}
+            </div>
+        """
+        tooltip_html = tooltip_inner
+
+    # Construct final HTML
+    html_parts = [
+        f'<div class="{class_str}">',
+        tooltip_html, # Tooltip sits inside card, absolute positioned relative to card
+        pill_html,
+        f'<div class="pkg-title">{safe_name}{badge_html}</div>',
+        f'<div class="pkg-price">{price_str}</div>',
+        desc_html,
+        '</div>'
+    ]
+
+    
+    return "".join(html_parts)
