@@ -647,9 +647,18 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
             
             try:
                 img_stream = None
+                img_stream = None
+                
+                # Handle Dict (New Structure)
+                if isinstance(p_item, dict):
+                    p_item = p_item.get("b64", "")
+                
                 if isinstance(p_item, str):
                     try:
-                        if "," in p_item: p_item = p_item.split(",", 1)[1]
+                        # Clean data URI prefix if present
+                        if "base64," in p_item: 
+                            p_item = p_item.split("base64,", 1)[1]
+                        
                         img_bytes = base64.b64decode(p_item)
                         img_stream = BytesIO(img_bytes)
                     except: pass
