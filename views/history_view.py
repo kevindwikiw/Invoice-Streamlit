@@ -137,7 +137,7 @@ def render_page():
                 st.markdown(f"<div style='color:#475569;'>{client}</div>", unsafe_allow_html=True)
             
             with c3:
-                st.markdown(f"<div style='color:#64748b; font-size:0.85rem;'>{date_str}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='color:#64748b; font-size:0.85rem;'>Created: {date_str}</div>", unsafe_allow_html=True)
             
             with c4:
                 st.markdown(f"<div style='text-align:right; font-weight:700; color:#0f172a;'>{rupiah(total)}</div>", unsafe_allow_html=True)
@@ -210,13 +210,38 @@ def _handle_edit(invoice_id: int):
         st.session_state["inv_client_email"] = meta.get("client_email", "")
         st.session_state["inv_venue"] = meta.get("venue", "")
         
-        # Handle date parsing
+        # Handle date parsing (try multiple formats with locale enforcement)
         try:
             w_date_str = meta.get("wedding_date", "")
             if w_date_str:
-                st.session_state["inv_wedding_date"] = datetime.strptime(w_date_str, "%d %B %Y").date()
-        except:
-            pass
+                import locale
+                # Save current locale and set to C/English for parsing
+                try:
+                    saved_locale = locale.getlocale(locale.LC_TIME)
+                    locale.setlocale(locale.LC_TIME, 'C')
+                except:
+                    saved_locale = None
+                
+                parsed = None
+                # Try formats in order
+                for fmt in ["%A, %d %B %Y", "%d %B %Y", "%Y-%m-%d"]:
+                    try:
+                        parsed = datetime.strptime(w_date_str, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                
+                # Restore locale
+                if saved_locale:
+                    try:
+                        locale.setlocale(locale.LC_TIME, saved_locale)
+                    except:
+                        pass
+                
+                if parsed:
+                    st.session_state["inv_wedding_date"] = parsed
+        except Exception as e:
+            print(f"[DEBUG] Date parse error: {e}")
             
         st.session_state["inv_cashback"] = float(meta.get("cashback", 0))
         
