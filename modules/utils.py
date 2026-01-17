@@ -91,9 +91,9 @@ import re
 def make_safe_filename(inv_no: str, prefix: str = "INV") -> str:
     inv_no = (inv_no or prefix).strip()
     # Replace common separators with underscore
-    s = inv_no.replace("/", "_").replace("\\", "_").replace(" ", "_")
-    # Remove all non-alphanumeric except _ and -
-    s = re.sub(r'[^a-zA-Z0-9_\-]', '', s)
+    s = inv_no.replace("/", "_").replace("\\", "_")
+    # Remove unsafe filesystem chars, but keep & and spaces
+    s = re.sub(r'[<>:"/\\|?*]', '', s)
     return s.strip() or "invoice"
 
 def image_to_base64(uploaded_file) -> str:
