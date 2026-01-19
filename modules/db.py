@@ -535,9 +535,14 @@ else:
 
 
 # --- Public API (Proxies) ---
+_db_schema_initialized = False  # Module-level flag to prevent redundant CREATE TABLE calls
 
 def init_db() -> None:
+    global _db_schema_initialized
+    if _db_schema_initialized:
+        return  # Skip if already initialized in this process
     current_db.init_db()
+    _db_schema_initialized = True
 
 def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
     return current_db.get_config(key, default)
