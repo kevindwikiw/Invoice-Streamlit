@@ -295,15 +295,31 @@ def render_package_card(
     safe_name = html.escape(str(name or "Unnamed"))
     
     # Handle Description (List vs String)
+    # For compact view, limit to 3 lines max
+    max_lines = 3 if compact else 10
+    
     if isinstance(description, list):
-        # Join with bullets for display
-        desc_text_for_title = "\n".join([f"• {line}" for line in description if line.strip()]) # For Title Attribute
-        # Use HTML bullet for cleaner look
-        safe_desc = "<br>".join([f"• {html.escape(line)}" for line in description if line.strip()])
+        lines_filtered = [line for line in description if line.strip()]
+        # Limit lines for display (truncate with ...)
+        if len(lines_filtered) > max_lines:
+            display_lines = lines_filtered[:max_lines]
+            display_lines[-1] = display_lines[-1] + " ..."
+        else:
+            display_lines = lines_filtered
+            
+        # Full text for tooltip
+        desc_text_for_title = "\n".join([f"• {line}" for line in lines_filtered])
+        # Truncated for card display
+        safe_desc = "<br>".join([f"• {html.escape(line)}" for line in display_lines])
     else:
         desc_text = str(description or "")
         desc_text_for_title = desc_text
-        safe_desc = html.escape(desc_text).replace("\n", "<br>")
+        # Limit string by lines too
+        lines = desc_text.split("\n")
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            lines[-1] = lines[-1] + " ..."
+        safe_desc = "<br>".join([f"• {html.escape(line)}" for line in lines if line.strip()])
     
     # Price formatting
     price_str = rupiah_formatter(price) if rupiah_formatter else f"Rp {price:,.0f}".replace(",", ".")
