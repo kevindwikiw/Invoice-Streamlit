@@ -5,7 +5,7 @@ from controllers.invoice_callbacks import cb_add_item_to_cart, cb_delete_item_by
 from views.styles import POS_COLUMN_RATIOS
 from views.invoice_components import render_package_card
 
-CATEGORIES = ["Utama", "Bonus", "Add-on"]
+CATEGORIES = ["Utama", "Bonus"]
 
 def render_sidebar_packages_v2(packages: List[Dict[str, Any]]) -> None:
     """Refactored Sidebar: Cleaner, Modular, Limit 5."""
@@ -14,6 +14,11 @@ def render_sidebar_packages_v2(packages: List[Dict[str, Any]]) -> None:
     
     # Search
     search_query = st.text_input("Search", placeholder="🔍 Search...", key="sb_search", label_visibility="collapsed").lower().strip()
+    
+    # Full Catalog Button
+    st.caption("Browse & Select Multiple Packages")
+    if st.button("🌐 Full Catalog", key="btn_full_catalog", use_container_width=True):
+        _open_full_catalog_dialog(packages)
     
     # Cart State
     cart_ids = {str(item.get("_row_id")) for item in st.session_state.get("inv_items", [])}
@@ -44,8 +49,8 @@ def render_sidebar_packages_v2(packages: List[Dict[str, Any]]) -> None:
         items = grouped[category]
         if not items: continue
         
-        # Limit Logic (Utama: 7, Others: 3 = Total 10)
-        limit = 7 if category == "Utama" else 3
+        # Limit Logic: Utama shows 6, Bonus shows 3
+        limit = 6 if category == "Utama" else 3
         
         # Pagination
         page_key = f"pge_{category}"
@@ -74,20 +79,51 @@ def render_sidebar_packages_v2(packages: List[Dict[str, Any]]) -> None:
             <hr style="margin:4px 0 8px 0; border-top:1px solid #eee;">
         ''', unsafe_allow_html=True)
 
-        # List Items Loop
+        # 1-Column List Layout
         for pkg in display_items:
             _render_sidebar_item(pkg, cart_ids)
             
-        # UI STABILITY: Spacer logic
+        # UI STABILITY: Spacer for missing items
         if is_paginated:
             missing = limit - len(display_items)
             if missing > 0:
-                # 85px is approx height of 1 card row
+                # Approx 85px per card
                 st.markdown(f"<div style='height: {missing * 85}px;'></div>", unsafe_allow_html=True)
 
         # Pagination Controls
         if is_paginated and len(items) > limit:
             _render_pagination(category, current_page, len(items), limit, page_key)
+
+
+def _render_sidebar_item_compact(pkg, cart_ids):
+    """Compact card for 2-column grid layout using shared render_package_card."""
+    pkg_id = str(pkg["id"])
+    is_added = pkg_id in cart_ids
+    
+    # Use the same render_package_card as Package Database for consistent hover
+    desc = pkg.get("description", "")
+    lines = desc_to_lines(normalize_desc_text(desc))
+    
+    html_code = render_package_card(
+        name=pkg["name"], 
+        price=safe_float(pkg["price"]), 
+        description=lines,
+        category=pkg.get("category"),
+        is_added=is_added,
+        compact=True,
+        rupiah_formatter=rupiah
+    )
+    st.markdown(html_code, unsafe_allow_html=True)
+    
+    # Action button
+    if is_added:
+        if st.button("✕", key=f"rem_{pkg_id}", use_container_width=True):
+            cb_delete_item_by_row_id(pkg_id)
+            st.rerun()
+    else:
+        if st.button("＋", key=f"add_{pkg_id}", use_container_width=True):
+            cb_add_item_to_cart(pkg)
+            st.rerun()
 
 
 def _render_sidebar_item(pkg, cart_ids):
@@ -146,3 +182,83 @@ def _render_pagination(category, current, total, limit, key):
         if st.button("›", key=f"p_{key}_next", disabled=(current >= total_pages-1), use_container_width=True):
             st.session_state[key] = current + 1
             st.rerun()
+
+
+@st.dialog("🌐 Full Catalog", width="large")
+def _open_full_catalog_dialog(packages: List[Dict[str, Any]]):
+    """Multi-select catalog with batch apply. Checkbox on top for animation."""
+    
+    st.markdown("""
+        <style>
+            div[data-testid="stModal"] div[role="dialog"] { width: 98vw !important; max-width: 100vw !important; }
+            div[data-testid="stDialog"] > div { width: 98vw !important; max-width: 100vw !important; }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # Source of truth
+    cart_ids = {str(item.get("_row_id")) for item in st.session_state.get("inv_items", [])}
+    
+    # Pending state
+    if "_pa" not in st.session_state: st.session_state._pa = set()
+    if "_pr" not in st.session_state: st.session_state._pr = set()
+    pend_add, pend_rem = st.session_state._pa, st.session_state._pr
+    
+    # Search
+    search = st.text_input("🔍 Search...", key="fc_s", label_visibility="collapsed").lower().strip()
+    
+    # Group O(n)
+    grouped = {cat: [] for cat in CATEGORIES}
+    for p in packages:
+        if search and search not in p.get("name", "").lower(): continue
+        cat = p.get("category")
+        if cat in grouped: grouped[cat].append(p)
+    
+    if not any(grouped.values()):
+        st.info("No packages found.")
+        return
+    
+    # Render
+    for cat, items in grouped.items():
+        if not items: continue
+        st.markdown(f"#### {cat} ({len(items)})")
+        
+        for i in range(0, len(items), 3):
+            cols = st.columns(3)
+            for j, pkg in enumerate(items[i:i+3]):
+                with cols[j]:
+                    pid = str(pkg["id"])
+                    in_cart = pid in cart_ids
+                    is_sel = (in_cart or pid in pend_add) and pid not in pend_rem
+                    
+                    # CHECKBOX FIRST (for animation)
+                    chk = st.checkbox("" if is_sel else "", value=is_sel, key=f"fc_{pid}")
+                    
+                    # Update pending
+                    if chk and not in_cart: pend_add.add(pid); pend_rem.discard(pid)
+                    elif not chk and in_cart: pend_rem.add(pid); pend_add.discard(pid)
+                    elif chk and in_cart: pend_rem.discard(pid)
+                    elif not chk and not in_cart: pend_add.discard(pid)
+                    
+                    # Card with CHECKBOX value for instant visual
+                    desc_lines = desc_to_lines(normalize_desc_text(pkg.get("description", "")))
+                    html = render_package_card(pkg["name"], safe_float(pkg["price"]), desc_lines, 
+                                               pkg.get("category"), is_added=chk, compact=True, 
+                                               rupiah_formatter=rupiah)
+                    st.markdown(html, unsafe_allow_html=True)
+        st.markdown("---")
+    
+    # Summary & Apply
+    net = len(cart_ids) + len(pend_add) - len(pend_rem)
+    if pend_add or pend_rem:
+        st.info(f"+{len(pend_add)} / -{len(pend_rem)} → **{net}** total")
+    
+    if st.button("✓ Apply & Close", type="primary", use_container_width=True):
+        pkg_map = {str(p["id"]): p for p in packages}
+        for pid in pend_add:
+            if pid in pkg_map: cb_add_item_to_cart(pkg_map[pid])
+        for pid in pend_rem:
+            cb_delete_item_by_row_id(pid)
+        st.session_state._pa = set()
+        st.session_state._pr = set()
+        st.rerun()
+
