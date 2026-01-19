@@ -322,6 +322,8 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
             key="inv_cashback", 
             on_change=invalidate_pdf
         )
+        if c_cb > 0:
+            st.caption("ℹ️ *Menggunakan Template Invoice Diskon*")
         
         html_grand = f"""
         <div style="background:#e3f2fd; padding:12px; border-radius:8px; margin-top:8px; color:#1565c0;">
