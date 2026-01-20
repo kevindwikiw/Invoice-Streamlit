@@ -1,0 +1,12 @@
+{
+  "name": "invoice-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "start": "bun run src/server.ts"
+  },
+  "dependencies": {
+    "elysia": "^1.0.0"
+  }
+}
