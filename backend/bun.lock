@@ -4,6 +4,7 @@
     "": {
       "name": "invoice-backend",
       "dependencies": {
+        "@sinclair/typebox": "^0.34.47",
         "elysia": "^1.0.0",
       },
     },
