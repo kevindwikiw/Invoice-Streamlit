@@ -11,14 +11,13 @@ def render_sidebar_packages_v2(packages: List[Dict[str, Any]]) -> None:
     """Refactored Sidebar: Cleaner, Modular, Limit 5."""
     
     st.markdown('<div class="sidebar-header"><h3>📦 Select Packages</h3></div>', unsafe_allow_html=True)
-    
-    # Search
-    search_query = st.text_input("Search", placeholder="🔍 Search...", key="sb_search", label_visibility="collapsed").lower().strip()
-    
-    # Full Catalog Button
     st.caption("Browse & Select Multiple Packages")
     if st.button("🌐 Full Catalog", key="btn_full_catalog", use_container_width=True):
-        _open_full_catalog_dialog(packages)
+        st.session_state["show_catalog"] = not st.session_state.get("show_catalog", False)
+        st.rerun()
+
+    # Search (Moved to bottom for alignment)
+    search_query = st.text_input("Search", placeholder="🔍 Search...", key="sb_search", label_visibility="collapsed").lower().strip()
     
     # Cart State
     cart_ids = {str(item.get("_row_id")) for item in st.session_state.get("inv_items", [])}
@@ -49,8 +48,8 @@ def render_sidebar_packages_v2(packages: List[Dict[str, Any]]) -> None:
         items = grouped[category]
         if not items: continue
         
-        # Limit Logic: Utama shows 6, Bonus shows 3
-        limit = 6 if category == "Utama" else 3
+        # Limit Logic: Show 6 items per page for all categories (Cleaner UI)
+        limit = 6
         
         # Pagination
         page_key = f"pge_{category}"
@@ -102,7 +101,10 @@ def _render_sidebar_item_compact(pkg, cart_ids):
     
     # Use the same render_package_card as Package Database for consistent hover
     desc = pkg.get("description", "")
-    lines = desc_to_lines(normalize_desc_text(desc))
+    raw_lines = desc_to_lines(normalize_desc_text(desc))
+    lines = raw_lines[:3]
+    if len(raw_lines) > 3:
+        lines.append(f"... (+{len(raw_lines)-3})")
     
     html_code = render_package_card(
         name=pkg["name"], 
@@ -111,19 +113,16 @@ def _render_sidebar_item_compact(pkg, cart_ids):
         category=pkg.get("category"),
         is_added=is_added,
         compact=True,
-        rupiah_formatter=rupiah
+        rupiah_formatter=rupiah,
+        full_description=raw_lines
     )
     st.markdown(html_code, unsafe_allow_html=True)
     
     # Action button
     if is_added:
-        if st.button("✕", key=f"rem_{pkg_id}", use_container_width=True):
-            cb_delete_item_by_row_id(pkg_id)
-            st.rerun()
+        st.button("✕", key=f"rem_{pkg_id}", use_container_width=True, on_click=cb_delete_item_by_row_id, args=(pkg_id,))
     else:
-        if st.button("＋", key=f"add_{pkg_id}", use_container_width=True):
-            cb_add_item_to_cart(pkg)
-            st.rerun()
+        st.button("＋", key=f"add_{pkg_id}", use_container_width=True, on_click=cb_add_item_to_cart, args=(pkg,))
 
 
 def _render_sidebar_item(pkg, cart_ids):
@@ -131,8 +130,12 @@ def _render_sidebar_item(pkg, cart_ids):
     is_added = pkg_id in cart_ids
     
     # Prepare lines for tooltip/desc
+    # Prepare lines for tooltip/desc
     desc = pkg.get("description", "")
-    lines = desc_to_lines(normalize_desc_text(desc))
+    raw_lines = desc_to_lines(normalize_desc_text(desc))
+    lines = raw_lines[:3]
+    if len(raw_lines) > 3:
+        lines.append(f"... (+{len(raw_lines)-3})")
     
     # Layout (Clean)
     c_card, c_btn = st.columns([0.82, 0.18], gap="small", vertical_alignment="center")
@@ -146,21 +149,18 @@ def _render_sidebar_item(pkg, cart_ids):
             category=pkg.get("category"),
             is_added=is_added,
             compact=True,
-            rupiah_formatter=rupiah
+            rupiah_formatter=rupiah,
+            full_description=raw_lines
         )
         st.markdown(html_code, unsafe_allow_html=True)
         
     with c_btn:
         if is_added:
             # Simple X icon
-            if st.button("✕", key=f"rem_{pkg_id}"):
-                cb_delete_item_by_row_id(pkg_id)
-                st.rerun()
+            st.button("✕", key=f"rem_{pkg_id}", on_click=cb_delete_item_by_row_id, args=(pkg_id,))
         else:
             # Simple + icon
-            if st.button("＋", key=f"add_{pkg_id}"):
-                cb_add_item_to_cart(pkg)
-                st.rerun()
+            st.button("＋", key=f"add_{pkg_id}", on_click=cb_add_item_to_cart, args=(pkg,))
 
 def _render_pagination(category, current, total, limit, key):
     # Symmetric Layout: [Btn 25%] [Text 50%] [Btn 25%]
@@ -184,16 +184,12 @@ def _render_pagination(category, current, total, limit, key):
             st.rerun()
 
 
-@st.dialog("🌐 Full Catalog", width="large")
-def _open_full_catalog_dialog(packages: List[Dict[str, Any]]):
+
+# Removing @st.dialog decorator so it can be embedded in main page
+def render_full_catalog_content(packages: List[Dict[str, Any]]):
     """Multi-select catalog with batch apply. Checkbox on top for animation."""
     
-    st.markdown("""
-        <style>
-            div[data-testid="stModal"] div[role="dialog"] { width: 98vw !important; max-width: 100vw !important; }
-            div[data-testid="stDialog"] > div { width: 98vw !important; max-width: 100vw !important; }
-        </style>
-    """, unsafe_allow_html=True)
+    # st.markdown style removed (no longer needed for modal width hack)
     
     # Source of truth
     cart_ids = {str(item.get("_row_id")) for item in st.session_state.get("inv_items", [])}
@@ -240,10 +236,14 @@ def _open_full_catalog_dialog(packages: List[Dict[str, Any]]):
                     elif not chk and not in_cart: pend_add.discard(pid)
                     
                     # Card with CHECKBOX value for instant visual
-                    desc_lines = desc_to_lines(normalize_desc_text(pkg.get("description", "")))
+                    desc_lines_raw = desc_to_lines(normalize_desc_text(pkg.get("description", "")))
+                    desc_lines = desc_lines_raw[:3]
+                    if len(desc_lines_raw) > 3:
+                        desc_lines.append(f"... (+{len(desc_lines_raw)-3})")
+                        
                     html = render_package_card(pkg["name"], safe_float(pkg["price"]), desc_lines, 
-                                               pkg.get("category"), is_added=chk, compact=True, 
-                                               rupiah_formatter=rupiah)
+                                               pkg.get("category"), is_added=chk, compact=False, 
+                                               rupiah_formatter=rupiah, full_description=desc_lines_raw)
                     st.markdown(html, unsafe_allow_html=True)
         st.markdown("---")
     
@@ -260,5 +260,6 @@ def _open_full_catalog_dialog(packages: List[Dict[str, Any]]):
             cb_delete_item_by_row_id(pid)
         st.session_state._pa = set()
         st.session_state._pr = set()
+        st.session_state["show_catalog"] = False
         st.rerun()
 
