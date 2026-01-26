@@ -6,6 +6,7 @@ POS_COLUMN_RATIOS = [2.2, 0.8, 0.6, 1.2, 0.5]  # Description | Price | Qty | Tot
 def _pos_grid_template(ratios: List[float]) -> str:
     return " ".join([f"{r}fr" for r in ratios])
 
+@st.cache_data(show_spinner=False)
 def get_invoice_css() -> str:
     """Returns CSS styles for the invoice view."""
     grid = _pos_grid_template(POS_COLUMN_RATIOS)
@@ -132,24 +133,23 @@ def get_invoice_css() -> str:
     }}
     /* Tooltip/Popover CSS for Sidebar Description */
     .pkg-desc {{
-        font-size: 0.78rem;
-        color: #6b7280;
+        font-size: 0.8rem;
+        color: #9ca3af; /* Lighter gray (Sepian) */
         line-height: 1.4;
-        position: relative;
-        /* Default state: Clamped */
-        height: 2.8em; 
-        overflow: hidden;
+        margin-top: 4px;
+        font-weight: 400;
+        min-height: 4.5em; /* FIX: Force height for 3 lines (1.4em * 3 approx) */
         display: -webkit-box;
-        -webkit-line-clamp: 2;
+        -webkit-line-clamp: 3;
         -webkit-box-orient: vertical;
-        background: white;
-        transition: height 0.2s, box-shadow 0.2s;
+        overflow: hidden;
     }}
     
     /* Strict Sidebar Height */
     .pkg-card.compact .pkg-desc {{
         font-size: 0.75rem;
         height: 2.8em; /* Force fixed height */
+        min-height: 2.8em;
         -webkit-line-clamp: 2;
         pointer-events: none; /* KILL NATIVE BROWSER TOOLTIP */
     }}
@@ -284,7 +284,8 @@ def render_package_card(
     is_main: bool = False,
     compact: bool = False,
     desc_max_lines: int = 2,
-    rupiah_formatter=None
+    rupiah_formatter=None,
+    full_description: list | None = None
 ) -> str:
     """
     Generates HTML for a package card.
@@ -307,13 +308,19 @@ def render_package_card(
         else:
             display_lines = lines_filtered
             
-        # Full text for tooltip
-        desc_text_for_title = "\n".join([f"• {line}" for line in lines_filtered])
-        # Truncated for card display
+        if full_description:
+            # Use provided full list for tooltip
+            desc_text_for_title = "\n".join([f"• {line}" for line in full_description if line.strip()])
+        else:
+            # Use the filtered list (might be truncated already if caller passed truncated)
+            # This is fallback. Ideally caller passes full_description if they truncate 'description'
+            desc_text_for_title = "\n".join([f"• {line}" for line in lines_filtered])
+            
+        # Truncated for card display (already truncated by caller if passed as list usually, or we truncate here)
         safe_desc = "<br>".join([f"• {html.escape(line)}" for line in display_lines])
     else:
         desc_text = str(description or "")
-        desc_text_for_title = desc_text
+        desc_text_for_title = str(full_description) if full_description else desc_text
         # Limit string by lines too
         lines = desc_text.split("\n")
         if len(lines) > max_lines:
@@ -359,7 +366,7 @@ def render_package_card(
         tooltip_inner = f"""
             <div class="pkg-tip">
                 <div style="font-weight:700; margin-bottom:4px; color:#1f2937;">📋 Details</div>
-                {safe_desc.replace(chr(10), "<br>• ")}
+                {html.escape(desc_text_for_title).replace(chr(10), "<br>")}
             </div>
         """
         tooltip_html = tooltip_inner
