@@ -14,7 +14,9 @@ st.set_page_config(
 
 # Imports after page_config
 from modules import auth, db
-from views import packages_view, invoice_view, history_view
+from modules import auth, db
+from modules.invoice_state import load_packages_cached, get_dashboard_stats_cached, get_config_cached, get_package_version_cached
+from views import packages_view, invoice_view, history_view, analytics_view
 
 # =========================================================
 # 2. INITIALIZATION ROUTINES
@@ -59,6 +61,10 @@ def render_sidebar() -> str:
 
         # User Card
         username = st.session_state.get("username", "Admin")
+        is_superadmin = auth.is_superadmin()
+        status_text = "● Superadmin" if is_superadmin else "● Online"
+        status_color = "#f59e0b" if is_superadmin else "#2ecc71"
+        
         st.markdown(
             f"""
             <div style="
@@ -66,10 +72,10 @@ def render_sidebar() -> str:
               padding:12px 14px; border:1px solid var(--border); border-radius:12px;
               background:#fff; margin-top:8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
               <div style="display:flex; align-items:center; gap: 10px;">
-                <div style="font-size: 20px;">👤</div>
+                <div style="font-size: 20px;">{'🛡️' if is_superadmin else '👤'}</div>
                 <div>
                     <div style="font-weight:700; color:#333; line-height:1.2;">{username}</div>
-                    <div style="color:#2ecc71; font-size:11px; font-weight:600;">● Online</div>
+                    <div style="color:{status_color}; font-size:11px; font-weight:600;">{status_text}</div>
                 </div>
               </div>
             </div>
@@ -80,12 +86,14 @@ def render_sidebar() -> str:
 
         # Stats
         try:
-            packages = db.load_packages()
+            # Smart Caching: Use package version to invalidate if needed
+            pkg_ver = get_package_version_cached()
+            packages = load_packages_cached(pkg_ver)
             pkg_count = len(packages)
             db_empty = (pkg_count == 0)
             
-            # Fetch Dashboard Stats
-            stats = db.get_dashboard_stats()
+            # Fetch Dashboard Stats (Cached 10s)
+            stats = get_dashboard_stats_cached()
             total_rev = stats.get("revenue", 0)
             inv_count = stats.get("count", 0)
             
@@ -116,6 +124,7 @@ def render_sidebar() -> str:
         if not db_empty:
              nav_options.append("🧾 Create Invoice")
              nav_options.append("📜 Invoice History")
+             nav_options.append("📈 Analytics") # Moved to bottom per user request
         
         # State Persistence
         current_selection = st.session_state.get("menu_selection", nav_options[0])
@@ -140,8 +149,44 @@ def render_sidebar() -> str:
         auth.logout_button()
         
         with st.expander("🛠️ System Tools"):
+            # Change Password (Available to all users)
+            if st.button("🔑 Change My Password", use_container_width=True):
+                auth.show_change_password_dialog()
+            
+            # Superadmin-only: Reset Admin Password
+            if auth.is_superadmin():
+                st.divider()
+                st.caption("🔐 **Superadmin Tools**")
+                if st.button("🔧 Reset Any User Password", use_container_width=True):
+                    auth.show_reset_password_dialog()
+            
+            st.divider()
             if st.button("🔴 Factory Reset", use_container_width=True):
                 show_factory_reset_dialog()
+
+            st.write("")
+            st.caption("⚙️ Invoice Sequence")
+            # Peek current next (which is "current stored" + 1)
+            # Stored is the "LAST USED". Next is +1.
+            # User wants to set "Start from". If user sets 250, next should be 251.
+            # So we set config to 250.
+            
+            # We want to peek what is currently stored
+            cur_seq_str = get_config_cached("inv_seq_global", "0")
+            cur_seq = int(cur_seq_str) if str(cur_seq_str).isdigit() else 0
+            
+            new_seq = st.number_input("Last Used Sequence", min_value=0, value=cur_seq, help="Set this to 250 if you want the next invoice to be 251.")
+            if new_seq != cur_seq:
+                if st.button("Update Sequence"):
+                    db.set_config("inv_seq_global", str(int(new_seq)))
+                    
+                    # Clear session cache so the new sequence is picked up immediately
+                    st.session_state.pop("_draft_global_seq", None)
+                    st.session_state.pop("inv_no", None)
+                    
+                    st.success(f"Sequence updated to {new_seq}. Next Invoice: INV{int(new_seq)+1:05d}")
+                    time.sleep(1.5)
+                    st.rerun()
 
         return selected
 
@@ -164,6 +209,9 @@ def main():
     if selected_menu == "📦 Package Database":
         packages_view.render_page()
         
+    elif selected_menu == "📈 Analytics": # Added Analytics Route
+        analytics_view.render_page()
+        
     elif selected_menu == "🧾 Create Invoice":
         if db.is_db_empty():
             st.error("Database is empty. Please add packages first.")
@@ -175,6 +223,7 @@ def main():
 
     elif selected_menu == "📜 Invoice History":
         history_view.render_page()
+
 
 if __name__ == "__main__":
     try:
