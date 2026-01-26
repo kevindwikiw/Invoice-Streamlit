@@ -118,6 +118,31 @@ class DatabaseAdapter(ABC):
     def is_db_empty(self) -> bool:
         pass
 
+    @abstractmethod
+    def get_analytics_summary(self, year: int, month: int) -> Dict[str, Any]:
+        """Returns {count, revenue} for specific month."""
+        pass
+
+    @abstractmethod
+    def get_analytics_revenue_trend(self, year: int) -> List[Dict[str, Any]]:
+        """Returns monthly revenue for the year."""
+        pass
+
+    @abstractmethod
+    def get_analytics_top_packages(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """Returns most popular packages based on saved invoice data."""
+        pass
+
+    @abstractmethod
+    def get_monthly_report_data(self, year: int, month: int) -> List[Dict[str, Any]]:
+        """Returns list of invoices for tabular report."""
+        pass
+
+    @abstractmethod
+    def get_yearly_report_data(self, year: int) -> List[Dict[str, Any]]:
+        """Returns list of invoices for yearly tabular report."""
+        pass
+
 
 # --- SQLite Implementation ---
 class SQLiteAdapter(DatabaseAdapter):
@@ -167,6 +192,13 @@ class SQLiteAdapter(DatabaseAdapter):
                 c.execute("ALTER TABLE invoices ADD COLUMN pdf_blob BLOB")
             except sqlite3.OperationalError:
                 pass  # Column already exists
+
+            # Migration: Add is_active column for Package Archiving
+            try:
+                c.execute("ALTER TABLE packages ADD COLUMN is_active INTEGER DEFAULT 1")
+            except sqlite3.OperationalError:
+                pass 
+                
             conn.commit()
 
     def get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
@@ -193,17 +225,21 @@ class SQLiteAdapter(DatabaseAdapter):
         with self._connect() as conn:
             c = conn.cursor()
             c.execute("""
-                INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data, pdf_blob)
+            INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data, pdf_blob)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob))
             conn.commit()
+        # Invalidate analytics cache
+        bump_analytics_version()
 
     def get_invoices(self, limit: int = 50) -> List[Dict[str, Any]]:
         # Using json_extract for client_phone
         query = """
             SELECT id, invoice_no, client_name, date, total_amount, created_at, 
                    LENGTH(invoice_data) as data_size,
-                   json_extract(invoice_data, '$.meta.client_phone') as client_phone
+                   json_extract(invoice_data, '$.meta.client_phone') as client_phone,
+                   json_extract(invoice_data, '$.meta.wedding_date') as wedding_date,
+                   json_extract(invoice_data, '$.meta.payment_terms') as payment_terms
             FROM invoices ORDER BY id DESC LIMIT ?
         """
         try:
@@ -220,7 +256,9 @@ class SQLiteAdapter(DatabaseAdapter):
         sql = """
             SELECT id, invoice_no, client_name, date, total_amount, created_at, 
                    LENGTH(invoice_data) as data_size,
-                   json_extract(invoice_data, '$.meta.client_phone') as client_phone
+                   json_extract(invoice_data, '$.meta.client_phone') as client_phone,
+                   json_extract(invoice_data, '$.meta.wedding_date') as wedding_date,
+                   json_extract(invoice_data, '$.meta.payment_terms') as payment_terms
             FROM invoices 
             WHERE invoice_no LIKE ? OR client_name LIKE ?
             ORDER BY id DESC LIMIT ?
@@ -254,12 +292,16 @@ class SQLiteAdapter(DatabaseAdapter):
                 WHERE id=?
             """, (invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob, invoice_id))
             conn.commit()
+        # Invalidate analytics cache
+        bump_analytics_version()
 
     def delete_invoice(self, invoice_id: int) -> None:
         with self._connect() as conn:
             c = conn.cursor()
             c.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
             conn.commit()
+        # Invalidate analytics cache
+        bump_analytics_version()
 
     def get_dashboard_stats(self) -> Dict[str, Any]:
         query = "SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue FROM invoices"
@@ -272,11 +314,172 @@ class SQLiteAdapter(DatabaseAdapter):
         except Exception:
             return {"count": 0, "revenue": 0}
 
-    def load_packages(self) -> List[Dict[str, Any]]:
+    def get_analytics_summary(self, year: int, month: int) -> Dict[str, Any]:
+        # Date format assumed YYYY-MM-DD
+        pattern = f"{year}-{month:02d}-%"
+        query = "SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue FROM invoices WHERE date LIKE ?"
+        try:
+            with self._connect() as conn:
+                c = conn.cursor()
+                c.execute(query, (pattern,))
+                row = c.fetchone()
+                return dict(row) if row else {"count": 0, "revenue": 0}
+        except Exception:
+            return {"count": 0, "revenue": 0}
+
+    def get_analytics_revenue_trend(self, year: int) -> List[Dict[str, Any]]:
+        # Returns list of {month: 1-12, revenue: float}
+        pattern = f"{year}-%"
+        # Extract month from YYYY-MM-DD (substr(date, 6, 2))
+        query = """
+            SELECT substr(date, 6, 2) as month, SUM(total_amount) as revenue 
+            FROM invoices 
+            WHERE date LIKE ? 
+            GROUP BY month 
+            ORDER BY month
+        """
+        try:
+            with self._connect() as conn:
+                c = conn.cursor()
+                c.execute(query, (pattern,))
+                return [{"month": int(r["month"]), "revenue": r["revenue"]} for r in c.fetchall()]
+        except Exception:
+            return []
+
+    def get_analytics_top_packages(self, limit: int = 5) -> List[Dict[str, Any]]:
+        # Fetches all invoice_data and counts in Python (hard to do robustly in SQLite JSON)
+        query = "SELECT invoice_data FROM invoices ORDER BY id DESC LIMIT 200" # Limit analysis to last 200 for perf
+        package_counts = {}
+        
+        try:
+            with self._connect() as conn:
+                c = conn.cursor()
+                c.execute(query)
+                rows = c.fetchall()
+                
+            for r in rows:
+                try:
+                    data = json.loads(r["invoice_data"])
+                    items = data.get("items", [])
+                    for item in items:
+                        name = item.get("Description", "Unknown")
+                        qty = item.get("Qty", 1)
+                        if name in package_counts:
+                            package_counts[name] += qty
+                        else:
+                            package_counts[name] = qty
+                except:
+                    continue
+            
+            # Sort top N
+            sorted_pkg = sorted(package_counts.items(), key=lambda x: x[1], reverse=True)[:limit]
+            return [{"name": k, "count": v} for k, v in sorted_pkg]
+            
+        except Exception:
+            return []
+
+    def get_analytics_bookings(self, limit: int = 20) -> List[Dict[str, Any]]:
+        query = "SELECT id, invoice_no, client_name, total_amount, invoice_data FROM invoices ORDER BY date DESC LIMIT ?"
+        bookings = []
+        try:
+            with self._connect() as conn:
+                c = conn.cursor()
+                c.execute(query, (limit,))
+                rows = c.fetchall()
+            
+            for r in rows:
+                try:
+                    data = json.loads(r["invoice_data"])
+                    meta = data.get("meta", {})
+                    
+                    # Extract fields
+                    w_date = meta.get("wedding_date", "")
+                    venue = meta.get("venue", "Unknown Venue")
+                    title = meta.get("title", f"Invoice #{r['invoice_no']}")
+                    
+                    bookings.append({
+                        "id": r['id'],
+                        "date": w_date,
+                        "venue": venue,
+                        "client": r['client_name'],
+                        "title": title,
+                        "amount": r['total_amount'],
+                        "items": data.get("items", [])
+                    })
+                except:
+                    continue
+            return bookings
+        except Exception:
+            return []
+
+    def get_monthly_report_data(self, year: int, month: int) -> List[Dict[str, Any]]:
+        pattern = f"{year}-{month:02d}-%"
+        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices WHERE date LIKE ? ORDER BY date ASC"
+        result = []
+        try:
+            with self._connect() as conn:
+                c = conn.cursor()
+                c.execute(query, (pattern,))
+                rows = c.fetchall()
+            
+            for r in rows:
+                try:
+                    data = json.loads(r["invoice_data"])
+                    meta = data.get("meta", {})
+                    result.append({
+                        "id": r['id'],
+                        "invoice_no": r['invoice_no'],
+                        "client": r['client_name'],
+                        "created_date": r['date'],
+                        "event_date": w_date,
+                        "venue": venue,
+                        "amount": r['total_amount'],
+                        "meta": meta
+                    })
+                except:
+                    continue
+            return result
+        except Exception:
+            return []
+
+    def get_yearly_report_data(self, year: int) -> List[Dict[str, Any]]:
+        pattern = f"{year}-%"
+        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices WHERE date LIKE ? ORDER BY date ASC"
+        result = []
+        try:
+            with self._connect() as conn:
+                c = conn.cursor()
+                c.execute(query, (pattern,))
+                rows = c.fetchall()
+            
+            for r in rows:
+                try:
+                    data = json.loads(r["invoice_data"])
+                    meta = data.get("meta", {})
+                    result.append({
+                        "id": r['id'],
+                        "invoice_no": r['invoice_no'],
+                        "client": r['client_name'],
+                        "created_date": r['date'],
+                        "event_date": meta.get("wedding_date", ""),
+                        "venue": meta.get("venue", "Unknown"),
+                        "amount": r['total_amount'],
+                        "meta": meta
+                    })
+                except:
+                    continue
+            return result
+        except Exception:
+            return []
+
+    def load_packages(self, active_only: bool = True) -> List[Dict[str, Any]]:
         try:
             with self._connect() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM packages")
+                if active_only:
+                    cursor.execute("SELECT * FROM packages WHERE is_active = 1")
+                else:
+                    cursor.execute("SELECT * FROM packages")
                 return [dict(row) for row in cursor.fetchall()]
         except Exception:
             return []
@@ -289,6 +492,7 @@ class SQLiteAdapter(DatabaseAdapter):
                 (name, price, category, description)
             )
             conn.commit()
+        bump_package_version()
 
     def update_package(self, package_id: int, name: str, price: float, category: str, description: str) -> None:
         with self._connect() as conn:
@@ -299,12 +503,22 @@ class SQLiteAdapter(DatabaseAdapter):
                 WHERE id = ?
             """, (name, price, category, description, package_id))
             conn.commit()
+        bump_package_version()
 
     def delete_package(self, package_id: int) -> None:
         with self._connect() as conn:
             c = conn.cursor()
             c.execute('DELETE FROM packages WHERE id = ?', (package_id,))
             conn.commit()
+        bump_package_version()
+
+    def toggle_package_status(self, package_id: int, is_active: bool) -> None:
+        with self._connect() as conn:
+            c = conn.cursor()
+            val = 1 if is_active else 0
+            c.execute("UPDATE packages SET is_active = ? WHERE id = ?", (val, package_id))
+            conn.commit()
+        bump_package_version()
 
     def delete_all_packages(self) -> None:
         with self._connect() as conn:
@@ -408,7 +622,9 @@ class PostgresAdapter(DatabaseAdapter):
         query = """
             SELECT id, invoice_no, client_name, date, total_amount, created_at, 
                    LENGTH(invoice_data) as data_size,
-                   invoice_data::json->'meta'->>'client_phone' as client_phone
+                   invoice_data::json->'meta'->>'client_phone' as client_phone,
+                   invoice_data::json->'meta'->>'wedding_date' as wedding_date,
+                   invoice_data::json->'meta'->'payment_terms' as payment_terms
             FROM invoices ORDER BY id DESC LIMIT %s
         """
         try:
@@ -424,7 +640,9 @@ class PostgresAdapter(DatabaseAdapter):
         sql = """
             SELECT id, invoice_no, client_name, date, total_amount, created_at, 
                    LENGTH(invoice_data) as data_size,
-                   invoice_data::json->'meta'->>'client_phone' as client_phone
+                   invoice_data::json->'meta'->>'client_phone' as client_phone,
+                   invoice_data::json->'meta'->>'wedding_date' as wedding_date,
+                   invoice_data::json->'meta'->'payment_terms' as payment_terms
             FROM invoices 
             WHERE invoice_no ILIKE %s OR client_name ILIKE %s
             ORDER BY id DESC LIMIT %s
@@ -526,6 +744,156 @@ class PostgresAdapter(DatabaseAdapter):
         except Exception:
             return True
 
+    def get_analytics_summary(self, year: int, month: int) -> Dict[str, Any]:
+        pattern = f"{year}-{month:02d}-%"
+        query = "SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as revenue FROM invoices WHERE date LIKE %s"
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query, (pattern,))
+                    row = c.fetchone()
+                    return dict(row) if row else {"count": 0, "revenue": 0}
+        except Exception:
+            return {"count": 0, "revenue": 0}
+
+    def get_analytics_revenue_trend(self, year: int) -> List[Dict[str, Any]]:
+        pattern = f"{year}-%"
+        # Extract month from YYYY-MM-DD
+        query = """
+            SELECT substring(date, 6, 2) as month, SUM(total_amount) as revenue 
+            FROM invoices 
+            WHERE date LIKE %s 
+            GROUP BY month 
+            ORDER BY month
+        """
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query, (pattern,))
+                    return [{"month": int(r["month"]), "revenue": r["revenue"]} for r in c.fetchall()]
+        except Exception:
+            return []
+
+    def get_analytics_top_packages(self, limit: int = 5) -> List[Dict[str, Any]]:
+        # Postgres can do JSONB aggregation better, but sticking to Python for consistency with SQLite logic
+        query = "SELECT invoice_data FROM invoices ORDER BY id DESC LIMIT 200"
+        package_counts = {}
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query)
+                    rows = c.fetchall()
+            
+            for r in rows:
+                try:
+                    # invoice_data is already string in this schema text
+                    data = json.loads(r["invoice_data"])
+                    items = data.get("items", [])
+                    for item in items:
+                        name = item.get("Description", "Unknown")
+                        qty = item.get("Qty", 1)
+                        if name in package_counts:
+                            package_counts[name] += qty
+                        else:
+                            package_counts[name] = qty
+                except:
+                    continue
+            
+            sorted_pkg = sorted(package_counts.items(), key=lambda x: x[1], reverse=True)[:limit]
+            return [{"name": k, "count": v} for k, v in sorted_pkg]
+        except Exception:
+            return []
+
+    def get_analytics_bookings(self, limit: int = 20) -> List[Dict[str, Any]]:
+        query = "SELECT id, invoice_no, client_name, total_amount, invoice_data FROM invoices ORDER BY date DESC LIMIT %s"
+        bookings = []
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query, (limit,))
+                    rows = c.fetchall()
+            
+            for r in rows:
+                try:
+                    data = json.loads(r["invoice_data"])
+                    meta = data.get("meta", {})
+                    
+                    bookings.append({
+                        "id": r['id'],
+                        "date": meta.get("wedding_date", ""),
+                        "venue": meta.get("venue", "Unknown Venue"),
+                        "client": r['client_name'],
+                        "title": meta.get("title", f"Invoice #{r['invoice_no']}"),
+                        "amount": r['total_amount'],
+                        "items": data.get("items", [])
+                    })
+                except:
+                    continue
+            return bookings
+        except Exception:
+            return []
+
+    def get_monthly_report_data(self, year: int, month: int) -> List[Dict[str, Any]]:
+        pattern = f"{year}-{month:02d}-%"
+        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices WHERE date LIKE %s ORDER BY date ASC"
+        result = []
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query, (pattern,))
+                    rows = c.fetchall()
+            
+            for r in rows:
+                try:
+                    data = json.loads(r["invoice_data"])
+                    meta = data.get("meta", {})
+                    
+                    result.append({
+                        "id": r['id'],
+                        "invoice_no": r['invoice_no'],
+                        "client": r['client_name'],
+                        "created_date": r['date'],
+                        "event_date": meta.get("wedding_date", ""),
+                        "venue": meta.get("venue", "Unknown"),
+                        "amount": r['total_amount'],
+                        "meta": meta
+                    })
+                except:
+                    continue
+            return result
+        except Exception:
+            return []
+
+    def get_yearly_report_data(self, year: int) -> List[Dict[str, Any]]:
+        pattern = f"{year}-%"
+        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices WHERE date LIKE %s ORDER BY date ASC"
+        result = []
+        try:
+            with self._connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as c:
+                    c.execute(query, (pattern,))
+                    rows = c.fetchall()
+            
+            for r in rows:
+                try:
+                    data = json.loads(r["invoice_data"])
+                    meta = data.get("meta", {})
+                    result.append({
+                        "id": r['id'],
+                        "invoice_no": r['invoice_no'],
+                        "client": r['client_name'],
+                        "created_date": r['date'],
+                        "event_date": meta.get("wedding_date", ""),
+                        "venue": meta.get("venue", "Unknown"),
+                        "amount": r['total_amount'],
+                        "meta": meta
+                    })
+                except:
+                    continue
+            return result
+        except Exception:
+            return []
+
 
 # --- Factory & Singleton ---
 if USE_POSTGRES:
@@ -552,6 +920,7 @@ def set_config(key: str, value: str) -> None:
 
 def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
     current_db.save_invoice(invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob)
+    bump_analytics_version()
 
 def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
     return current_db.get_invoices(limit)
@@ -561,17 +930,37 @@ def get_invoice_details(invoice_id: int) -> Optional[Dict[str, Any]]:
 
 def update_invoice(invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
     current_db.update_invoice(invoice_id, invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob)
+    bump_analytics_version()
 
 def delete_invoice(invoice_id: int) -> None:
     current_db.delete_invoice(invoice_id)
+    bump_analytics_version()
 
 def get_dashboard_stats() -> Dict[str, Any]:
     return current_db.get_dashboard_stats()
 
+def get_analytics_summary(year: int, month: int) -> Dict[str, Any]:
+    return current_db.get_analytics_summary(year, month)
+
+def get_analytics_revenue_trend(year: int) -> List[Dict[str, Any]]:
+    return current_db.get_analytics_revenue_trend(year)
+
+def get_analytics_top_packages(limit: int = 5) -> List[Dict[str, Any]]:
+    return current_db.get_analytics_top_packages(limit)
+
+def get_analytics_bookings(limit: int = 20) -> List[Dict[str, Any]]:
+    return current_db.get_analytics_bookings(limit)
+
+def get_monthly_report_data(year: int, month: int) -> List[Dict[str, Any]]:
+    return current_db.get_monthly_report_data(year, month)
+
+def get_yearly_report_data(year: int) -> List[Dict[str, Any]]:
+    return current_db.get_yearly_report_data(year)
+
 # Cached Wrapper for Load Packages
 @st.cache_data(ttl=300, show_spinner=False)
-def load_packages() -> List[Dict[str, Any]]:
-    return current_db.load_packages()
+def load_packages(active_only: bool = True) -> List[Dict[str, Any]]:
+    return current_db.load_packages(active_only=active_only)
 
 def _clear_cache() -> None:
     load_packages.clear()
@@ -588,6 +977,11 @@ def delete_package(package_id: int) -> None:
     current_db.delete_package(package_id)
     _clear_cache()
 
+def toggle_package_status(package_id: int, is_active: bool) -> None:
+    if hasattr(current_db, 'toggle_package_status'):
+        current_db.toggle_package_status(package_id, is_active)
+        _clear_cache()
+
 def delete_all_packages() -> None:
     current_db.delete_all_packages()
     _clear_cache()
@@ -595,7 +989,16 @@ def delete_all_packages() -> None:
 def is_db_empty() -> bool:
     return current_db.is_db_empty()
 
-# Logic independent of Adapter
+# --- Versioning for Smart Caching ---
+def get_package_version() -> str:
+    """Returns the current package database version (timestamp)."""
+    return get_config("package_version", "0")
+
+def bump_package_version() -> None:
+    """Updates the package database version to current timestamp."""
+    import time
+    set_config("package_version", str(time.time()))
+
 def get_next_invoice_seq(prefix: str) -> int:
     """
     Get and increment invoice sequence for a given client prefix.
@@ -618,3 +1021,40 @@ def get_next_invoice_seq(prefix: str) -> int:
     set_config(config_key, str(next_seq))
     
     return next_seq
+
+# Global sequence for Auto-Gen (INV00001)
+def peek_next_global_sequence() -> int:
+    """Gets the next global sequence number WITHOUT incrementing it yet."""
+    config_key = "inv_seq_global"
+    current = get_config(config_key, "0")
+    try:
+        current_seq = int(current)
+    except:
+        current_seq = 0
+    return current_seq + 1
+
+def update_global_sequence_if_needed(used_seq: int) -> None:
+    """Updates the global sequence if the used_seq > current stored sequence."""
+    config_key = "inv_seq_global"
+    current = get_config(config_key, "0")
+    try:
+        current_seq = int(current)
+    except:
+        current_seq = 0
+    
+    if used_seq > current_seq:
+        set_config(config_key, str(used_seq))
+
+def get_next_global_sequence() -> int:
+    """Gets the next global sequence number (inv_seq_global) AND increments it."""
+    return get_next_invoice_seq("global")  # Re-use existing logic with 'global' prefix
+
+# --- Smart Caching Helpers (Analytics) ---
+def get_analytics_version() -> str:
+    """Returns a timestamp of the last invoice update (affects analytics)."""
+    return get_config('analytics_version', default='0')
+
+def bump_analytics_version() -> None:
+    """Updates the analytics version timestamp to now."""
+    import time
+    set_config('analytics_version', str(time.time()))
