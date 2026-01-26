@@ -17,6 +17,7 @@ from modules import auth, db
 from modules import auth, db
 from modules.invoice_state import load_packages_cached, get_dashboard_stats_cached, get_config_cached, get_package_version_cached
 from views import packages_view, invoice_view, history_view, analytics_view
+from views.db_status import render_db_status
 
 # =========================================================
 # 2. INITIALIZATION ROUTINES
@@ -187,6 +188,9 @@ def render_sidebar() -> str:
                     st.success(f"Sequence updated to {new_seq}. Next Invoice: INV{int(new_seq)+1:05d}")
                     time.sleep(1.5)
                     st.rerun()
+
+        # --- DB Status Indicator ---
+        render_db_status()
 
         return selected
 
