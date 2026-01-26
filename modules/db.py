@@ -820,17 +820,29 @@ class PostgresAdapter(DatabaseAdapter):
                     
                     bookings.append({
                         "id": r['id'],
-                        "date": meta.get("wedding_date", ""),
+                        "date": meta.get("wedding_date", "") or r.get("date", ""), # Fallback to created date
                         "venue": meta.get("venue", "Unknown Venue"),
                         "client": r['client_name'],
                         "title": meta.get("title", f"Invoice #{r['invoice_no']}"),
                         "amount": r['total_amount'],
                         "items": data.get("items", [])
                     })
-                except:
+                except Exception as e:
+                    print(f"[DB] Error parsing invoice {r.get('id')}: {e}")
+                    # Fallback for corrupted data so it at least shows up
+                    bookings.append({
+                        "id": r['id'],
+                        "date": str(r.get("date", "")),
+                        "venue": "Data Error",
+                        "client": r['client_name'] + " (Corrupted)",
+                        "title": f"Invoice #{r['invoice_no']}",
+                        "amount": r['total_amount'],
+                        "items": []
+                    })
                     continue
             return bookings
-        except Exception:
+        except Exception as e:
+            print(f"[DB] Critical error in get_analytics_bookings: {e}")
             return []
 
     def get_monthly_report_data(self, year: int, month: int) -> List[Dict[str, Any]]:
@@ -911,6 +923,10 @@ def init_db() -> None:
         return  # Skip if already initialized in this process
     current_db.init_db()
     _db_schema_initialized = True
+
+def get_adapter_type() -> str:
+    """Returns 'Postgres' or 'SQLite' based on active adapter."""
+    return "Postgres" if isinstance(current_db, PostgresAdapter) else "SQLite"
 
 def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
     return current_db.get_config(key, default)
