@@ -5,7 +5,6 @@ from uuid import uuid4
 from typing import Any, Dict, List
 
 from modules import db
-from modules import db
 # from modules import invoice as invoice_mod # Lazy load in action_generate_pdf to save RAM/Startup
 from modules.invoice_state import (
     load_db_settings, 
@@ -89,6 +88,45 @@ def cb_update_invoice_no() -> None:
     # New invoice: generate fresh
     st.session_state["inv_no"] = generate_invoice_no()
     invalidate_pdf()
+
+def cb_client_name_changed() -> None:
+    """Updates Invoice No suffix when Client Name changes (if in draft mode)."""
+    # 1. Invalidate PDF first
+    invalidate_pdf()
+    
+    # 0. GUARD: Do NOT auto-change Invoice No if we are editing an existing invoice!
+    # The user might be correcting a typo in the name, but we shouldn't change the Invoice ID.
+    if st.session_state.get("editing_invoice_id"):
+        return
+
+    # 2. Get values
+    client_name = st.session_state.get("inv_client_name", "").strip()
+    current_no = st.session_state.get("inv_no", "").strip()
+    
+    # 3. Check if we should auto-update
+    # Logic: If inv_no starts with 'INV' and digits, we append/replace suffix
+    # e.g. INV001 -> INV001_RISA
+    # e.g. INV001_OLD -> INV001_RISA
+    # e.g. MY_CUSTOM_NO -> do nothing
+    
+    import re
+    # Pattern: ^(INV\d+)(?:_.*)?$
+    # Matches INV001 or INV001_ANYTHING
+    match = re.match(r'^(INV\d+)(?:_.*)?$', current_no)
+    
+    if match and client_name:
+        base_prefix = match.group(1) # e.g. INV001
+        # Sanitized client name for ID (uppercase, unsafe chars removed)
+        safe_suffix = "".join([c for c in client_name if c.isalnum() or c in (' ', '&', '-', '.')]).upper().strip()
+        # safe_suffix = safe_suffix.replace(" ", "_") # User prefers spaces for readability
+        
+        # Limit suffix length?
+        # Construct new ID
+        new_no = f"{base_prefix}_{safe_suffix}"
+        
+        # Update state
+        st.session_state["inv_no"] = new_no
+        st.toast(f"Invoice No updated to: {new_no}", icon="🤖")
 
 def cb_add_item_to_cart(package: Dict[str, Any]) -> None:
     try:
@@ -252,17 +290,24 @@ def cb_reset_transaction() -> None:
     st.session_state.pop("inv_title", None)
     st.session_state["_default_inv_title"] = db_conf["title"]
     
-    # Reload Configs (in case user saved new defaults) - use pop() for widget-bound
-    st.session_state.pop("inv_terms", None)
+    # Reload Configs (FORCE RESET to Global Defaults)
+    st.session_state["inv_terms"] = db_conf["terms"]
     st.session_state["_default_inv_terms"] = db_conf["terms"]
-    st.session_state.pop("bank_nm", None)
+    
+    st.session_state["bank_nm"] = db_conf["bank_nm"]
     st.session_state["_default_bank_nm"] = db_conf["bank_nm"]
-    st.session_state.pop("bank_ac", None)
+    
+    st.session_state["bank_ac"] = db_conf["bank_ac"]
     st.session_state["_default_bank_ac"] = db_conf["bank_ac"]
-    st.session_state.pop("bank_an", None)
+    
+    st.session_state["bank_an"] = db_conf["bank_an"]
     st.session_state["_default_bank_an"] = db_conf["bank_an"]
-    st.session_state.pop("inv_footer", None)
+    
+    st.session_state["inv_footer"] = db_conf["inv_footer"]
     st.session_state["_default_inv_footer"] = db_conf["inv_footer"]
+    
+    # WA Template needs special handling as it might not be in db_conf dict directly if not loaded by load_db_settings main query
+    st.session_state.pop("wa_template", None) 
 
     st.session_state.pop("inv_client_name", None)
     st.session_state.pop("inv_client_phone", None)
@@ -270,6 +315,7 @@ def cb_reset_transaction() -> None:
     st.session_state.pop("inv_venue", None)
     st.session_state.pop("inv_wedding_date", None)
     st.session_state.pop("inv_no", None)
+    st.session_state.pop("_draft_global_seq", None)  # Force re-fetch of next sequence
     
     st.session_state["payment_terms"] = [
         {"id": "dp", "label": "Down Payment", "amount": 0, "locked": True},
@@ -411,9 +457,33 @@ def cb_unmerge_bundle(bundle_id: str) -> None:
     invalidate_pdf()
     st.toast("Bundling reverted.", icon="↩️")
 
-def handle_save_history(inv_no: str, client_email: str, pdf_bytes) -> None:
+def _sync_payment_terms_from_ui() -> None:
+    """Manually sync widget values to payment_terms list before saving/generating."""
+    terms = st.session_state.get("payment_terms", [])
+    for i, term in enumerate(terms):
+        term_id = term.get("id", f"term_{i}")
+        # Sync Amount
+        amt_key = f"pay_amt_{term_id}"
+        if amt_key in st.session_state:
+            terms[i]["amount"] = int(st.session_state[amt_key])
+        
+        # Sync Label (custom terms only)
+        label_key = f"pay_label_{term_id}"
+        if label_key in st.session_state and not term.get("locked"):
+            terms[i]["label"] = st.session_state[label_key]
+    
+    st.session_state["payment_terms"] = terms
+
+def handle_save_history(inv_no: str, is_update: bool = False) -> None:
     """Save invoice to database history with PDF blob."""
     try:
+        # Retrieve context from session state
+        client_email = st.session_state.get("inv_client_email", "")
+        pdf_bytes = st.session_state.get("generated_pdf_bytes")
+
+        # 0. Sync UI values first! (Critical for callbacks)
+        _sync_payment_terms_from_ui()
+
         # 0. Normalize pdf_bytes to raw bytes
         pdf_blob = None
         if pdf_bytes:
@@ -488,12 +558,24 @@ def handle_save_history(inv_no: str, client_email: str, pdf_bytes) -> None:
                 pdf_blob=pdf_blob
             )
             st.toast("Invoice saved! Redirecting to History...", icon="💾")
+            
+            # Check if we need to update global sequence
+            # ONLY for NEW invoices (not edits)
+            if not st.session_state.get("editing_invoice_id"):
+                # Try parse numeric part from inv_no (e.g. INV00123)
+                # This ensures next person gets INV00124
+                import re
+                m = re.search(r'(\d+)', inv_no)
+                if m:
+                    used_num = int(m.group(1))
+                    db.update_global_sequence_if_needed(used_num)
         
         # Reset form and set redirect flag (will be handled outside callback)
         cb_reset_transaction()
         st.session_state["menu_selection"] = "📜 Invoice History"
         st.session_state["nav_key"] = st.session_state.get("nav_key", 0) + 1
         st.session_state["_redirect_to_history"] = True
+        st.rerun() # Force redirect immediately
             
     except Exception as e:
         import traceback
@@ -502,6 +584,9 @@ def handle_save_history(inv_no: str, client_email: str, pdf_bytes) -> None:
 
 def action_generate_pdf(subtotal: float, grand_total: float) -> None:
     try:
+        # Sync UI first!
+        _sync_payment_terms_from_ui()
+
         meta = {
             "inv_no": st.session_state.get("inv_no", ""),
             "title": st.session_state.get("inv_title", "Invoice"),
