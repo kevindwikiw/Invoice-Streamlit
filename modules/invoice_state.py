@@ -47,9 +47,18 @@ def load_db_settings() -> Dict[str, Any]:
     }
 
 @st.cache_data(show_spinner=False, ttl=CATALOG_CACHE_TTL_SEC)
-def load_packages_cached() -> List[Dict[str, Any]]:
+def load_packages_cached(version_key: str) -> List[Dict[str, Any]]:
+    # version_key is just for invalidation (not used in function)
     raw = db.load_packages()
     return normalize_db_records(raw)
+
+@st.cache_data(show_spinner=False, ttl=10)  # Short TTL for dashboard stats (10s)
+def get_dashboard_stats_cached() -> Dict[str, Any]:
+    return db.get_dashboard_stats()
+
+@st.cache_data(show_spinner=False, ttl=10)
+def get_config_cached(key: str, default: Any = None) -> Any:
+    return db.get_config(key, default)
 
 def initialize_session_state() -> None:
     # Load custom defaults from DB
@@ -71,7 +80,7 @@ def initialize_session_state() -> None:
 
         # Invoice Metadata
         "inv_title": "",
-        "inv_no": "",
+        "inv_no": "",  # Will be populated below if empty
         "inv_client_name": "",
         "inv_client_phone": "",
         "inv_client_email": "",
@@ -99,6 +108,33 @@ def initialize_session_state() -> None:
         "uploader_key": 0,
     }
 
+    # --- Auto-Gen Logic (Draft) ---
+    # If starting fresh (no invoice number), fetch next global sequence
+    if not defaults["inv_no"]:
+        # Only if not already in session (to avoid burning sequence on refresh)
+        if "inv_no" not in st.session_state or not st.session_state["inv_no"]:
+            # Try get sequence from DB
+            try:
+                # We peek/get next sequence. Note: This increments the counter DB side!
+                # If user cancels, we burn a number. Acceptable for simple usage.
+                # To prevent burning on every tab refresh without saving, we could store 'last_draft_seq' in session_state?
+                # But st.session_state persists per session.
+                # If user hits F5, session state might reset if not configured? No, local Streamlit usually keeps it.
+                # Let's check if we have a draft seq
+                draft_seq = st.session_state.get("_draft_global_seq")
+                if not draft_seq:
+                    # Optimized: Use cached config to avoid DB hit on every refresh
+                    current_seq_str = get_config_cached("inv_seq_global", "0")
+                    draft_seq = int(current_seq_str) + 1 if str(current_seq_str).isdigit() else 1
+                    
+                    st.session_state["_draft_global_seq"] = draft_seq
+                
+                # Format: INV{seq} (Padding 5 digits)
+                defaults["inv_no"] = f"INV{draft_seq:05d}"
+            except Exception as e:
+                print(f"Auto-gen failed: {e}")
+                pass
+
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -122,6 +158,12 @@ def _sanitize_client_name(name: str) -> str:
     clean = re.sub(r'[^a-zA-Z0-9]', '', name)
     # Take first 12 chars uppercase
     return clean[:12].upper() if clean else ""
+
+# --- Versioning Helper Cached ---
+@st.cache_data(show_spinner=False, ttl=10)
+def get_package_version_cached() -> str:
+    """Cached wrapper for DB package version to avoid connection overhead."""
+    return db.get_package_version()
 
 def generate_invoice_no() -> str:
     """Generate invoice number based on client name with DB-backed sequence."""
