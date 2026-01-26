@@ -729,32 +729,24 @@ class PostgresAdapter(DatabaseAdapter):
                 conn.commit()
         except Exception as e:
             print(f"[DB] Postgres update_package failed: {e}")
-# ... (Continuing to Global Wrappers)
-
-# Cached Wrapper for Load Packages
-@st.cache_data(ttl=300, show_spinner=False)
-def load_packages() -> List[Dict[str, Any]]:
-    return current_db.load_packages()
-
-def _clear_cache() -> None:
-    load_packages.clear()
-    bump_package_version() # Ensure frontend sees the update
-
-def add_package(name: str, price: float, category: str, description: str) -> None:
-    current_db.add_package(name, price, category, description)
-    _clear_cache()
 
     def delete_package(self, package_id: int) -> None:
-        with self._connect() as conn:
-            with conn.cursor() as c:
-                c.execute('DELETE FROM packages WHERE id = %s', (package_id,))
-            conn.commit()
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as c:
+                    c.execute('DELETE FROM packages WHERE id = %s', (package_id,))
+                conn.commit()
+        except Exception as e:
+            print(f"[DB] Postgres delete_package failed: {e}")
 
     def delete_all_packages(self) -> None:
-        with self._connect() as conn:
-            with conn.cursor() as c:
-                c.execute("TRUNCATE TABLE packages RESTART IDENTITY;")
-            conn.commit()
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as c:
+                    c.execute("TRUNCATE TABLE packages RESTART IDENTITY;")
+                conn.commit()
+        except Exception as e:
+            print(f"[DB] Postgres delete_all_packages failed: {e}")
 
     def is_db_empty(self) -> bool:
         try:
@@ -780,7 +772,7 @@ def add_package(name: str, price: float, category: str, description: str) -> Non
 
     def get_analytics_revenue_trend(self, year: int) -> List[Dict[str, Any]]:
         pattern = f"{year}-%"
-        # Extract month from YYYY-MM-DD
+        # Postgres substring is 1-based, date format YYYY-MM-DD. Month is 6,2.
         query = """
             SELECT substring(date, 6, 2) as month, SUM(total_amount) as revenue 
             FROM invoices 
@@ -792,12 +784,12 @@ def add_package(name: str, price: float, category: str, description: str) -> Non
             with self._connect() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as c:
                     c.execute(query, (pattern,))
-                    return [{"month": int(r["month"]), "revenue": r["revenue"]} for r in c.fetchall()]
-        except Exception:
+                    return [{"month": int(r["month"]), "revenue": r["revenue"]} for r in c.fetchall() if r["month"] and r["month"].isdigit()]
+        except Exception as e:
+            print(f"[DB] Analytics Trend Error: {e}")
             return []
 
     def get_analytics_top_packages(self, limit: int = 5) -> List[Dict[str, Any]]:
-        # Postgres can do JSONB aggregation better, but sticking to Python for consistency with SQLite logic
         query = "SELECT invoice_data FROM invoices ORDER BY id DESC LIMIT 200"
         package_counts = {}
         try:
@@ -808,7 +800,6 @@ def add_package(name: str, price: float, category: str, description: str) -> Non
             
             for r in rows:
                 try:
-                    # invoice_data is already string in this schema text
                     data = json.loads(r["invoice_data"])
                     items = data.get("items", [])
                     for item in items:
@@ -839,10 +830,9 @@ def add_package(name: str, price: float, category: str, description: str) -> Non
                 try:
                     data = json.loads(r["invoice_data"])
                     meta = data.get("meta", {})
-                    
                     bookings.append({
                         "id": r['id'],
-                        "date": meta.get("wedding_date", "") or r.get("date", ""), # Fallback to created date
+                        "date": meta.get("wedding_date", "") or r.get("date", ""),
                         "venue": meta.get("venue", "Unknown Venue"),
                         "client": r['client_name'],
                         "title": meta.get("title", f"Invoice #{r['invoice_no']}"),
@@ -850,8 +840,7 @@ def add_package(name: str, price: float, category: str, description: str) -> Non
                         "items": data.get("items", [])
                     })
                 except Exception as e:
-                    print(f"[DB] Error parsing invoice {r.get('id')}: {e}")
-                    # Fallback for corrupted data so it at least shows up
+                    # Fallback for corrupted data
                     bookings.append({
                         "id": r['id'],
                         "date": str(r.get("date", "")),
@@ -863,8 +852,7 @@ def add_package(name: str, price: float, category: str, description: str) -> Non
                     })
                     continue
             return bookings
-        except Exception as e:
-            print(f"[DB] Critical error in get_analytics_bookings: {e}")
+        except Exception:
             return []
 
     def get_monthly_report_data(self, year: int, month: int) -> List[Dict[str, Any]]:
@@ -881,7 +869,6 @@ def add_package(name: str, price: float, category: str, description: str) -> Non
                 try:
                     data = json.loads(r["invoice_data"])
                     meta = data.get("meta", {})
-                    
                     result.append({
                         "id": r['id'],
                         "invoice_no": r['invoice_no'],
@@ -927,6 +914,21 @@ def add_package(name: str, price: float, category: str, description: str) -> Non
             return result
         except Exception:
             return []
+# ... (Continuing to Global Wrappers)
+
+# Cached Wrapper for Load Packages
+@st.cache_data(ttl=300, show_spinner=False)
+def load_packages() -> List[Dict[str, Any]]:
+    return current_db.load_packages()
+
+def _clear_cache() -> None:
+    load_packages.clear()
+    bump_package_version() # Ensure frontend sees the update
+
+def add_package(name: str, price: float, category: str, description: str) -> None:
+    current_db.add_package(name, price, category, description)
+    _clear_cache()
+
 
 
 # --- Factory & Singleton ---
