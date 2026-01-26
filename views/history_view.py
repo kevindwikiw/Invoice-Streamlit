@@ -69,7 +69,7 @@ def render_page():
     with f1:
         search_q = st.text_input("� Search", placeholder="Invoice no or client name...", label_visibility="collapsed")
     with f2:
-        limit = st.selectbox("Show", [25, 50, 100], index=0, label_visibility="collapsed")
+        limit = st.selectbox("Show", [10, 25, 50], index=0, label_visibility="collapsed")
     with f3:
         st.write("")  # Spacer
 
@@ -83,35 +83,83 @@ def render_page():
         st.info("📭 No invoices found. Start by creating your first invoice!")
         return
 
+    # --- Stats Calculation ---
+    total_revenue = 0
+    cnt_lunas = 0
+    cnt_dp = 0
+    cnt_unpaid = 0
+
+    for inv in invoices:
+        total_revenue += inv.get("total_amount", 0)
+        
+        # Determine Status for Counting
+        p_terms = inv.get("payment_terms")
+        if isinstance(p_terms, str):
+            try:
+                p_terms = json.loads(p_terms)
+            except:
+                p_terms = []
+        
+        is_lunas = False
+        is_dp = False
+        
+        if p_terms and isinstance(p_terms, list):
+            pelunasan = next((t for t in p_terms if t.get("id") == "full"), None)
+            is_lunas = pelunasan and int(float(pelunasan.get("amount", 0))) > 0
+            
+            if not is_lunas:
+                # If not lunas, check if any partial payment (DP) exists
+                is_dp = any(int(float(t.get("amount", 0))) > 0 for t in p_terms if t.get("id") != "full")
+        
+        if is_lunas:
+            cnt_lunas += 1
+        elif is_dp:
+            cnt_dp += 1
+        else:
+            cnt_unpaid += 1
+
     # --- Stats Bar ---
-    total_revenue = sum(inv.get("total_amount", 0) for inv in invoices)
     st.markdown(
-        f"""
-        <div style="display:flex; gap:24px; padding:12px 16px; background:#f8fafc; border-radius:8px; margin:16px 0;">
-            <div>
-                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Total Invoices</div>
-                <div style="font-size:1.25rem; font-weight:800; color:#0f172a;">{len(invoices)}</div>
-            </div>
-            <div>
-                <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Revenue (Shown)</div>
-                <div style="font-size:1.25rem; font-weight:800; color:#16a34a;">{rupiah(total_revenue)}</div>
-            </div>
-        </div>
-        """,
+        f'<div style="display:flex; flex-wrap:wrap; gap:24px; padding:12px 16px; background:#f8fafc; border-radius:8px; margin:16px 0; align-items: center;">'
+        f'    <div style="min-width: 100px;">'
+        f'        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Total Invoices</div>'
+        f'        <div style="font-size:1.25rem; font-weight:800; color:#0f172a;">{len(invoices)}</div>'
+        f'    </div>'
+        f'    <div style="min-width: 140px;">'
+        f'        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Revenue (Shown)</div>'
+        f'        <div style="font-size:1.25rem; font-weight:800; color:#16a34a;">{rupiah(total_revenue)}</div>'
+        f'    </div>'
+        f'    <div style="width: 1px; height: 32px; background: #e2e8f0;"></div>'
+        f'    <div style="display:flex; gap:16px;">'
+        f'        <div style="text-align:center;">'
+        f'            <div style="font-size:0.75rem; color:#15803d; font-weight:700;">LUNAS</div>'
+        f'            <div style="font-size:1.1rem; font-weight:800; color:#166534;">{cnt_lunas}</div>'
+        f'        </div>'
+        f'        <div style="text-align:center;">'
+        f'            <div style="font-size:0.75rem; color:#0369a1; font-weight:700;">DP / CICIL</div>'
+        f'            <div style="font-size:1.1rem; font-weight:800; color:#075985;">{cnt_dp}</div>'
+        f'        </div>'
+        f'        <div style="text-align:center;">'
+        f'            <div style="font-size:0.75rem; color:#64748b; font-weight:700;">UNPAID</div>'
+        f'            <div style="font-size:1.1rem; font-weight:800; color:#475569;">{cnt_unpaid}</div>'
+        f'        </div>'
+        f'    </div>'
+        f'</div>',
         unsafe_allow_html=True
     )
 
     # --- Invoice Table ---
     st.markdown(
         """
-        <div style="display:grid; grid-template-columns: 2fr 2fr 1.5fr 1fr 1.6fr; gap:8px; padding:10px 12px; 
+        <div style="display:grid; grid-template-columns: 1.8fr 1.8fr 1.0fr 1.2fr 1.2fr 0.6fr; gap:8px; padding:10px 12px; 
                     background:#f1f5f9; border-radius:6px; font-size:0.72rem; font-weight:700; 
                     color:#64748b; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;">
             <div>Invoice No</div>
             <div>Client</div>
-            <div>Date</div>
+            <div style="text-align:center;">Status</div>
+            <div>Event Date</div>
             <div style="text-align:right;">Amount</div>
-            <div style="text-align:center;">Actions</div>
+            <div style="text-align:center;">Action</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -121,13 +169,47 @@ def render_page():
         inv_id = inv["id"]
         inv_no = inv.get("invoice_no", "UNKNOWN")
         client = inv.get("client_name", "Unknown")
-        date_str = inv.get("date", "-")
+        created_str = inv.get("date", "-")
+        wedding_str = inv.get("wedding_date") or "-"
         total = inv.get("total_amount", 0)
         has_proof = inv.get("data_size", 0) > 15000
 
+        # Determine Status
+        status_badges = []
+        payment_terms = inv.get("payment_terms")
+        
+        # Parse if string
+        if isinstance(payment_terms, str):
+            try:
+                payment_terms = json.loads(payment_terms)
+            except:
+                payment_terms = []
+        
+        status_html = "-"
+        if payment_terms and isinstance(payment_terms, list):
+            pelunasan = next((t for t in payment_terms if t.get("id") == "full"), None)
+            has_full = pelunasan and int(float(pelunasan.get("amount", 0))) > 0
+            
+            # Count how many other terms (DP, Term 1, etc.) are paid
+            paid_others = [t for t in payment_terms if t.get("id") != "full" and int(float(t.get("amount", 0))) > 0]
+            dp_count = len(paid_others)
+            
+            if has_full:
+                status_html = "<div style='text-align:center;'><span style='background:#dcfce7; color:#166534; padding:2px 8px; border-radius:12px; font-size:0.65rem; font-weight:700;'>LUNAS</span></div>"
+            elif dp_count > 1:
+                # Multiple partial payments (e.g. DP + Term 1)
+                status_html = "<div style='text-align:center;'><span style='background:#ffedd5; color:#9a3412; padding:2px 8px; border-radius:12px; font-size:0.65rem; font-weight:700;'>DP + TERMIN</span></div>"
+            elif dp_count == 1:
+                # Just DP (or just one term)
+                status_html = "<div style='text-align:center;'><span style='background:#e0f2fe; color:#075985; padding:2px 8px; border-radius:12px; font-size:0.65rem; font-weight:700;'>DP</span></div>"
+            else:
+                status_html = "<div style='text-align:center;'><span style='background:#f1f5f9; color:#64748b; padding:2px 8px; border-radius:12px; font-size:0.65rem; font-weight:700;'>UNPAID</span></div>"
+        else:
+             status_html = "<div style='text-align:center;'><span style='background:#f1f5f9; color:#94a3b8; padding:2px 8px; border-radius:12px; font-size:0.65rem; font-weight:700;'>UNKNOWN</span></div>"
+
         # Row container
         with st.container():
-            c1, c2, c3, c4, c5 = st.columns([2, 2, 1.5, 1, 1.6], vertical_alignment="center")
+            c1, c2, c3, c4, c5, c6 = st.columns([1.8, 1.8, 1.0, 1.2, 1.2, 0.6], vertical_alignment="center")
             
             with c1:
                 proof_icon = " 📎" if has_proof else ""
@@ -137,12 +219,15 @@ def render_page():
                 st.markdown(f"<div style='color:#475569;'>{client}</div>", unsafe_allow_html=True)
             
             with c3:
-                st.markdown(f"<div style='color:#64748b; font-size:0.85rem;'>Created: {date_str}</div>", unsafe_allow_html=True)
-            
+                st.markdown(status_html, unsafe_allow_html=True)
+
             with c4:
-                st.markdown(f"<div style='text-align:right; font-weight:700; color:#0f172a;'>{rupiah(total)}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='color:#64748b;'>{wedding_str}</div>", unsafe_allow_html=True)
             
             with c5:
+                st.markdown(f"<div style='text-align:right; font-weight:700; color:#0f172a;'>{rupiah(total)}</div>", unsafe_allow_html=True)
+            
+            with c6:
                 # Optimized: Use Popover to prevent vertical stacking on mobile
                 with st.popover("⚙️", use_container_width=True):
                     # Edit
