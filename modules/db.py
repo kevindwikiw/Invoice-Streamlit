@@ -700,27 +700,49 @@ class PostgresAdapter(DatabaseAdapter):
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                     cursor.execute("SELECT * FROM packages ORDER BY id ASC")
                     return [dict(row) for row in cursor.fetchall()]
-        except Exception:
+        except Exception as e:
+            st.session_state["_db_error"] = f"load_packages: {str(e)}"
+            print(f"[DB] Postgres load_packages failed: {e}")
             return []
 
     def add_package(self, name: str, price: float, category: str, description: str) -> None:
-        with self._connect() as conn:
-            with conn.cursor() as c:
-                c.execute(
-                    'INSERT INTO packages (name, price, category, description) VALUES (%s, %s, %s, %s)',
-                    (name, price, category, description)
-                )
-            conn.commit()
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as c:
+                    c.execute(
+                        'INSERT INTO packages (name, price, category, description) VALUES (%s, %s, %s, %s)',
+                        (name, price, category, description)
+                    )
+                conn.commit()
+        except Exception as e:
+            print(f"[DB] Postgres add_package failed: {e}")
 
     def update_package(self, package_id: int, name: str, price: float, category: str, description: str) -> None:
-        with self._connect() as conn:
-            with conn.cursor() as c:
-                c.execute("""
-                    UPDATE packages
-                    SET name = %s, price = %s, category = %s, description = %s
-                    WHERE id = %s
-                """, (name, price, category, description, package_id))
-            conn.commit()
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as c:
+                    c.execute("""
+                        UPDATE packages
+                        SET name = %s, price = %s, category = %s, description = %s
+                        WHERE id = %s
+                    """, (name, price, category, description, package_id))
+                conn.commit()
+        except Exception as e:
+            print(f"[DB] Postgres update_package failed: {e}")
+# ... (Continuing to Global Wrappers)
+
+# Cached Wrapper for Load Packages
+@st.cache_data(ttl=300, show_spinner=False)
+def load_packages() -> List[Dict[str, Any]]:
+    return current_db.load_packages()
+
+def _clear_cache() -> None:
+    load_packages.clear()
+    bump_package_version() # Ensure frontend sees the update
+
+def add_package(name: str, price: float, category: str, description: str) -> None:
+    current_db.add_package(name, price, category, description)
+    _clear_cache()
 
     def delete_package(self, package_id: int) -> None:
         with self._connect() as conn:
