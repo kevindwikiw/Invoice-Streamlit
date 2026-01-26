@@ -1,7 +1,8 @@
 import streamlit as st
 from datetime import datetime
 from modules.utils import safe_float, calculate_totals
-from modules.invoice_state import initialize_session_state, load_packages_cached
+from modules.utils import safe_float, calculate_totals
+from modules.invoice_state import initialize_session_state, load_packages_cached, get_package_version_cached
 from views.styles import inject_styles, page_header
 from views.invoice_components import (
     render_event_metadata,
@@ -10,7 +11,8 @@ from views.invoice_components import (
     render_action_buttons,
     render_download_section
 )
-from views.sidebar_components import render_sidebar_packages_v2
+from views.sidebar_components import render_sidebar_packages_v2, render_full_catalog_content
+from modules import db
 
 # ==============================================================================
 # MAIN PAGE RENDERING
@@ -38,7 +40,9 @@ def render_page() -> None:
 
     # 4. Data Loading
     try:
-        packages = load_packages_cached()
+        # Smart Caching: Only invalidates when DB version changes
+        pkg_ver = get_package_version_cached()
+        packages = load_packages_cached(pkg_ver)
     except Exception as e:
         st.error(f"Connection Error: {e}")
         packages = []
@@ -58,6 +62,20 @@ def render_page() -> None:
     
     # --- RIGHT MAIN AREA ---
     with main_col:
+        
+        # 0. FULL CATALOG (Top of Main)
+        # Controlled by sidebar button
+        if st.session_state.get("show_catalog", False):
+            with st.container(border=True):
+                c_head, c_close = st.columns([0.85, 0.15])
+                c_head.subheader("🌐 Full Catalog Selection")
+                if c_close.button("✖ Close", use_container_width=True):
+                    st.session_state["show_catalog"] = False
+                    st.rerun()
+                
+                render_full_catalog_content(packages)
+            st.divider()
+
         # A. Form
         render_event_metadata()
         st.write("")
