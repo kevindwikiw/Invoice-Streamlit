@@ -90,9 +90,9 @@ import re
 
 def make_safe_filename(inv_no: str, prefix: str = "INV") -> str:
     inv_no = (inv_no or prefix).strip()
-    # Replace common separators with underscore
-    s = inv_no.replace("/", "_").replace("\\", "_")
-    # Remove unsafe filesystem chars, but keep & and spaces
+    # Replace common separators with underscore for filename safety
+    s = inv_no.replace("/", "_").replace("\\", "_").replace(" ", "_")
+    # Remove unsafe filesystem chars
     s = re.sub(r'[<>:"/\\|?*]', '', s)
     return s.strip() or "invoice"
 
