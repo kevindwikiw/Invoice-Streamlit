@@ -586,6 +586,19 @@ class PostgresAdapter(DatabaseAdapter):
         except Exception as e:
             print(f"[Postgres] Init failed: {e}")
 
+        # Migration: Add is_active column if missing
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as c:
+                    try:
+                        c.execute("ALTER TABLE packages ADD COLUMN is_active INTEGER DEFAULT 1")
+                        conn.commit()
+                        print("[DB] Added is_active column.")
+                    except Exception:
+                        conn.rollback() # Column likely exists
+        except Exception as e:
+            print(f"[Postgres] Migration is_active failed: {e}")
+
     def get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
         try:
             with self._connect() as conn:
@@ -694,13 +707,29 @@ class PostgresAdapter(DatabaseAdapter):
         except Exception:
             return {"count": 0, "revenue": 0}
 
-    def load_packages(self) -> List[Dict[str, Any]]:
+    def load_packages(self, active_only: bool = True) -> List[Dict[str, Any]]:
         try:
             with self._connect() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                    cursor.execute("SELECT * FROM packages ORDER BY id ASC")
+                    if active_only:
+                        # Ensure is_active column exists (migration above)
+                        # We use 1 for True, 0 for False
+                        cursor.execute("SELECT * FROM packages WHERE is_active = 1 ORDER BY id ASC")
+                    else:
+                        cursor.execute("SELECT * FROM packages ORDER BY id ASC")
                     return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
+            # Fallback for missing column or other errors
+            if "is_active" in str(e):
+                 # Retry without is_active
+                 try:
+                    with self._connect() as conn:
+                        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                            cursor.execute("SELECT * FROM packages ORDER BY id ASC")
+                            return [dict(row) for row in cursor.fetchall()]
+                 except:   
+                     pass
+            
             st.session_state["_db_error"] = f"load_packages: {str(e)}"
             print(f"[DB] Postgres load_packages failed: {e}")
             return []
