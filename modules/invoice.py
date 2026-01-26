@@ -108,14 +108,6 @@ def _draw_underlined_header(c, text, x, y, font="Helvetica-Bold", size=9):
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-def _draw_footer_contact(c, W):
-    bar_h = 10 * mm
-    c.setFillColor(colors.HexColor("#1a1a1a"))
-    c.rect(0, 0, W, bar_h, fill=1, stroke=0)
-    
-    # 2. Define Data items as SINGLE STRINGS
-    # User Request: "testing jadi 1 baris aja gausah dipisah... itu yg bikin error"
-    # Merging icon and text into one string guarantees they are on the same baseline.
     
 def _draw_footer_contact(c, W, items=None):
     """Draws footer bar with PNG icons and text."""
