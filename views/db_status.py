@@ -27,3 +27,7 @@ def render_db_status() -> None:
         """, 
         unsafe_allow_html=True
     )
+
+    # Show Debug Error if any
+    if "_db_error" in st.session_state:
+        st.sidebar.error(f"DB Error: {st.session_state['_db_error']}")
