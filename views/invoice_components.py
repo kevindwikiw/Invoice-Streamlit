@@ -74,7 +74,21 @@ def render_event_metadata() -> None:
         # Row 1: Core Event Data
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.text_input("Invoice No", key="inv_no", placeholder="e.g. INV/2026/001", on_change=invalidate_pdf, help="To change the starting sequence (e.g. to 250), go to System Tools in the Sidebar.")
+            # Proxy Widget for Invoice Number to ensure UI reflects Session State (Fix Empty Bug)
+            def _sync_inv_no():
+                st.session_state["inv_no"] = st.session_state["inv_no_proxy"]
+                invalidate_pdf()
+
+            # Ensure we start with the canonical value
+            current_inv_no = st.session_state.get("inv_no", "")
+            st.text_input(
+                "Invoice No", 
+                value=current_inv_no,
+                key="inv_no_proxy", 
+                placeholder="e.g. INV/2026/001", 
+                on_change=_sync_inv_no, 
+                help="To change the starting sequence (e.g. to 250), go to System Tools in the Sidebar."
+            )
         with c2:
             st.date_input("Wedding Date", key="inv_wedding_date", on_change=invalidate_pdf)
         with c3:
@@ -603,11 +617,19 @@ def render_download_section() -> None:
             with c_act1:
                 # Save / Update Logic
                 if is_editing:
-                    if st.button("💾 Update History", use_container_width=True):
-                        handle_save_history(inv_no, is_update=True)
+                    st.button(
+                        "💾 Update History", 
+                        use_container_width=True,
+                        on_click=handle_save_history,
+                        args=(inv_no, True)
+                    )
                 else:
-                    if st.button("💾 Save to History", use_container_width=True):
-                        handle_save_history(inv_no, is_update=False)
+                    st.button(
+                        "💾 Save to History", 
+                        use_container_width=True,
+                        on_click=handle_save_history,
+                        args=(inv_no, False)
+                    )
 
             with c_act2:
                 # WhatsApp Share Logic
