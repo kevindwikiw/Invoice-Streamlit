@@ -575,7 +575,7 @@ def handle_save_history(inv_no: str, is_update: bool = False) -> None:
         st.session_state["menu_selection"] = "📜 Invoice History"
         st.session_state["nav_key"] = st.session_state.get("nav_key", 0) + 1
         st.session_state["_redirect_to_history"] = True
-        st.rerun() # Force redirect immediately
+        # st.rerun() # Callback triggers rerun automatically in Streamlit
             
     except Exception as e:
         import traceback
