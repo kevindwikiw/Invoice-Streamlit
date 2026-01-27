@@ -417,60 +417,68 @@ def _handle_reprint(invoice_id: int):
     if pdf_bytes:
         inv_no_safe = make_safe_filename(meta.get("inv_no", "invoice"))
         
-        st.success("✅ PDF Ready!")
-        st.write("")
+        # --- A. Summary Card (Clean Design) ---
+        client_name = meta.get("client_name", detail.get("client_name", "Unknown"))
+        total_amt = detail.get("total_amount", 0)
+        inv_label = meta.get("inv_no", "-")
         
-        col_dl, col_wa = st.columns(2)
+        st.markdown(f"""
+        <div style="background:#f8fafc; padding:16px; border-radius:12px; margin-bottom:20px; border:1px solid #cbd5e1;">
+            <div style="color:#64748b; font-size:0.75rem; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Invoice Summary</div>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <div style="font-weight:800; color:#0f172a; font-size:1.1rem;">{client_name}</div>
+                    <div style="font-size:0.85rem; color:#475569;">#{inv_label}</div>
+                </div>
+                <div style="font-weight:800; color:#16a34a; font-size:1.2rem;">{rupiah(total_amt)}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        with col_dl:
-            st.download_button(
-                label="📥 Download PDF",
-                data=pdf_bytes,
-                file_name=f"{inv_no_safe}.pdf",
-                mime="application/pdf",
-                key=f"dl_modal_{invoice_id}",
-                type="primary",
-                use_container_width=True
-            )
+        # --- B. Primary Action: Download ---
+        st.download_button(
+            label="⬇️ Download PDF",
+            data=pdf_bytes,
+            file_name=f"{inv_no_safe}.pdf",
+            mime="application/pdf",
+            key=f"dl_modal_{invoice_id}",
+            type="primary", 
+            use_container_width=True
+        )
+        
+        # Spacer
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        
+        # --- C. Secondary Action: WhatsApp ---
+        phone_raw = meta.get("client_phone") or detail.get("client_phone")
+        target_phone = str(phone_raw) if phone_raw else ""
+        
+        # If no phone, allow temporary entry
+        if not target_phone or len(target_phone) < 5:
+            target_phone = st.text_input("📱 WhatsApp Number (Missing)", placeholder="e.g. 08123...", key=f"tmp_ph_{invoice_id}")
             
-        with col_wa:
-            # WhatsApp Logic in Dialog
-            phone_raw = meta.get("client_phone") or detail.get("client_phone")
+        if target_phone:
+            # Prepare WA logic
+            import re
+            import urllib.parse
             
-            if phone_raw:
-                import re
-                import urllib.parse
-                
-                # Sanitize
-                safe_phone = re.sub(r"[^0-9]", "", str(phone_raw))
-                if safe_phone.startswith("0"): safe_phone = "62" + safe_phone[1:]
-                
-                # Template
-                default_tpl = """Halo Kak {nama}!
-
-Terima kasih sudah mempercayakan momen spesial Anda kepada kami.
-
-Berikut detail invoice Anda:
-Invoice: {inv_no}
-
-Silakan cek file invoice yang sudah kami kirimkan ya. Jika ada pertanyaan, jangan ragu untuk menghubungi kami.
-
-Warm regards,
-ORBIT Team"""
-                tpl = db.get_config("wa_template_default") or default_tpl
-                msg = tpl.replace("{nama}", meta.get("client_name", "Kak")).replace("{inv_no}", meta.get("inv_no", "-"))
-                
-                encoded_msg = urllib.parse.quote(msg)
-                
-                if safe_phone:
-                    wa_url = f"https://wa.me/{safe_phone}?text={encoded_msg}"
-                else:
-                    wa_url = f"https://api.whatsapp.com/send?text={encoded_msg}"
-                    
-                if st.button("📱 WhatsApp", key=f"wa_modal_{invoice_id}", use_container_width=True):
-                    open_wa_dialog(wa_url)
+            safe_phone = re.sub(r"[^0-9]", "", target_phone)
+            if safe_phone.startswith("0"): safe_phone = "62" + safe_phone[1:]
+            
+            default_tpl = """Halo Kak {nama}!\n\nBerikut invoice Anda: {inv_no}\n\nTerima kasih!"""
+            tpl = db.get_config("wa_template_default") or default_tpl
+            msg = tpl.replace("{nama}", client_name).replace("{inv_no}", inv_label)
+            encoded_msg = urllib.parse.quote(msg)
+            
+            wa_url = f"https://wa.me/{safe_phone}?text={encoded_msg}" if safe_phone else "#"
+            
+            if safe_phone:
+                st.link_button("📤 Open WhatsApp Chat", wa_url, type="secondary", use_container_width=True)
             else:
-                st.button("📱 WhatsApp (No Number)", key=f"wa_modal_dis_{invoice_id}", disabled=True, use_container_width=True)
-        
+                 st.warning("Invalid phone number or format.")
+
+        else:
+            st.caption("ℹ️ Enter client phone number to enable sharing.")
+
         st.write("")
-        st.caption("Press Esc to close.")
+        st.markdown("<div style='text-align:center; color:#94a3b8; font-size:0.8rem; margin-top:8px;'>Press Esc to close</div>", unsafe_allow_html=True)
