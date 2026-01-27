@@ -5,6 +5,33 @@ import streamlit as st
 import json
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any
+from datetime import datetime
+
+# --- Helper: Robust Date Normalizer ---
+def _normalize_date_str(s: str) -> str:
+    if not s:
+        return s
+    s = str(s).strip()
+
+    # format umum
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except:
+            pass
+
+    # handle "2026-4-5" / "2026-4-05"
+    try:
+        parts = s.split("-")
+        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+            y = int(parts[0])
+            m = int(parts[1])
+            d = int(parts[2].split()[0])  # kalau ada time
+            return f"{y:04d}-{m:02d}-{d:02d}"
+    except:
+        pass
+
+    return s
 
 # --- Optional Postgres Support ---
 try:
@@ -222,6 +249,7 @@ class SQLiteAdapter(DatabaseAdapter):
             print(f"[SQLite] set_config failed: {e}")
 
     def save_invoice(self, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
+        date_str = _normalize_date_str(date_str)
         with self._connect() as conn:
             c = conn.cursor()
             c.execute("""
@@ -284,6 +312,7 @@ class SQLiteAdapter(DatabaseAdapter):
             return None
 
     def update_invoice(self, invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
+        date_str = _normalize_date_str(date_str)
         with self._connect() as conn:
             c = conn.cursor()
             c.execute("""
@@ -328,22 +357,48 @@ class SQLiteAdapter(DatabaseAdapter):
             return {"count": 0, "revenue": 0}
 
     def get_analytics_revenue_trend(self, year: int) -> List[Dict[str, Any]]:
-        # Returns list of {month: 1-12, revenue: float}
-        pattern = f"{year}-%"
-        # Extract month from YYYY-MM-DD (substr(date, 6, 2))
-        query = """
-            SELECT substr(date, 6, 2) as month, SUM(total_amount) as revenue 
-            FROM invoices 
-            WHERE date LIKE ? 
-            GROUP BY month 
-            ORDER BY month
-        """
+        # Logic: Fetch all invoices, parse 'wedding_date' -> Fallback to 'date'
+        query = "SELECT date, total_amount, invoice_data FROM invoices"
+        revenue_map = {m: 0.0 for m in range(1, 13)}
+        
         try:
             with self._connect() as conn:
                 c = conn.cursor()
-                c.execute(query, (pattern,))
-                return [{"month": int(r["month"]), "revenue": r["revenue"]} for r in c.fetchall()]
-        except Exception:
+                c.execute(query)
+                rows = c.fetchall()
+                
+            for r in rows:
+                try:
+                    data = json.loads(r["invoice_data"])
+                    w_date_str = data.get("meta", {}).get("wedding_date", "")
+                    
+                    # Parse Date (Prioritize Wedding Date)
+                    dt = None
+                    if w_date_str:
+                        for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                            try:
+                                dt = datetime.strptime(w_date_str, fmt)
+                                break
+                            except: continue
+                    
+                    # Fallback to Creation Date
+                    if not dt and r['date']:
+                        clean_date = _normalize_date_str(str(r['date']))
+                        if clean_date:
+                            try:
+                                dt = datetime.strptime(clean_date, "%Y-%m-%d")
+                            except: pass
+
+                    # If valid date and matches year
+                    if dt and dt.year == year:
+                        revenue_map[dt.month] += r["total_amount"]
+                except:
+                    continue
+            
+            return [{"month": m, "revenue": revenue_map[m]} for m in range(1, 13)]
+
+        except Exception as e:
+            print(f"[SQLite] Revenue Trend Error: {e}")
             return []
 
     def get_analytics_top_packages(self, limit: int = 5) -> List[Dict[str, Any]]:
@@ -413,61 +468,109 @@ class SQLiteAdapter(DatabaseAdapter):
             return []
 
     def get_monthly_report_data(self, year: int, month: int) -> List[Dict[str, Any]]:
-        pattern = f"{year}-{month:02d}-%"
-        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices WHERE date LIKE ? ORDER BY date ASC"
+        # Logic: Fetch all, Filter by wedding_date in Python, Sort by wedding_date
+        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices"
         result = []
         try:
             with self._connect() as conn:
                 c = conn.cursor()
-                c.execute(query, (pattern,))
+                c.execute(query)
                 rows = c.fetchall()
             
             for r in rows:
                 try:
                     data = json.loads(r["invoice_data"])
                     meta = data.get("meta", {})
-                    result.append({
-                        "id": r['id'],
-                        "invoice_no": r['invoice_no'],
-                        "client": r['client_name'],
-                        "created_date": r['date'],
-                        "event_date": w_date,
-                        "venue": venue,
-                        "amount": r['total_amount'],
-                        "meta": meta
-                    })
+                    w_date_str = meta.get("wedding_date", "")
+                    
+                    # Parse Date
+                    dt = None
+                    if w_date_str:
+                        for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                            try:
+                                dt = datetime.strptime(w_date_str, fmt)
+                                break
+                            except: continue
+                    
+                    # Fallback to Creation Date
+                    if not dt and r['date']:
+                        clean_date = _normalize_date_str(str(r['date']))
+                        if clean_date:
+                            try:
+                                dt = datetime.strptime(clean_date, "%Y-%m-%d")
+                            except: pass
+                    
+                    if dt and dt.year == year and dt.month == month:
+                         result.append({
+                            "id": r['id'],
+                            "invoice_no": r['invoice_no'],
+                            "client": r['client_name'],
+                            "created_date": r['date'],
+                            "event_date": dt.strftime("%d %B %Y"), # Standardized string
+                            "venue": meta.get("venue", "Unknown"),
+                            "amount": r['total_amount'],
+                            "meta": meta,
+                            "_sort_date": dt # Helper for sorting
+                        })
                 except:
                     continue
+            
+            # Sort by Event Date
+            result.sort(key=lambda x: x["_sort_date"])
             return result
         except Exception:
             return []
 
     def get_yearly_report_data(self, year: int) -> List[Dict[str, Any]]:
-        pattern = f"{year}-%"
-        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices WHERE date LIKE ? ORDER BY date ASC"
+        # Logic: Fetch all, Filter by wedding_date in Python, Sort by wedding_date
+        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices"
         result = []
         try:
             with self._connect() as conn:
                 c = conn.cursor()
-                c.execute(query, (pattern,))
+                c.execute(query)
                 rows = c.fetchall()
             
             for r in rows:
                 try:
                     data = json.loads(r["invoice_data"])
                     meta = data.get("meta", {})
-                    result.append({
-                        "id": r['id'],
-                        "invoice_no": r['invoice_no'],
-                        "client": r['client_name'],
-                        "created_date": r['date'],
-                        "event_date": meta.get("wedding_date", ""),
-                        "venue": meta.get("venue", "Unknown"),
-                        "amount": r['total_amount'],
-                        "meta": meta
-                    })
+                    w_date_str = meta.get("wedding_date", "")
+                    
+                    # Parse Date
+                    dt = None
+                    if w_date_str:
+                        for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                            try:
+                                dt = datetime.strptime(w_date_str, fmt)
+                                break
+                            except: continue
+                    
+                    # Fallback to Creation Date
+                    if not dt and r['date']:
+                        clean_date = _normalize_date_str(str(r['date']))
+                        if clean_date:
+                            try:
+                                dt = datetime.strptime(clean_date, "%Y-%m-%d")
+                            except: pass
+                    
+                    if dt and dt.year == year:
+                         result.append({
+                            "id": r['id'],
+                            "invoice_no": r['invoice_no'],
+                            "client": r['client_name'],
+                            "created_date": r['date'],
+                            "event_date": dt.strftime("%d %B %Y"),
+                            "venue": meta.get("venue", "Unknown"),
+                            "amount": r['total_amount'],
+                            "meta": meta,
+                            "_sort_date": dt
+                        })
                 except:
                     continue
+            
+            # Sort by Event Date
+            result.sort(key=lambda x: x["_sort_date"])
             return result
         except Exception:
             return []
@@ -623,6 +726,7 @@ class PostgresAdapter(DatabaseAdapter):
             print(f"[Postgres] set_config failed: {e}")
 
     def save_invoice(self, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
+        date_str = _normalize_date_str(date_str)
         with self._connect() as conn:
             with conn.cursor() as c:
                 c.execute("""
@@ -681,6 +785,7 @@ class PostgresAdapter(DatabaseAdapter):
             return None
 
     def update_invoice(self, invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
+        date_str = _normalize_date_str(date_str)
         with self._connect() as conn:
             with conn.cursor() as c:
                 c.execute("""
@@ -800,22 +905,51 @@ class PostgresAdapter(DatabaseAdapter):
             return {"count": 0, "revenue": 0}
 
     def get_analytics_revenue_trend(self, year: int) -> List[Dict[str, Any]]:
-        pattern = f"{year}-%"
-        # Postgres substring is 1-based, date format YYYY-MM-DD. Month is 6,2.
-        query = """
-            SELECT substring(date, 6, 2) as month, SUM(total_amount) as revenue 
-            FROM invoices 
-            WHERE date LIKE %s 
-            GROUP BY month 
-            ORDER BY month
-        """
+        # Logic: Fetch all, Parse wedding_date -> Fallback to date
+        query = "SELECT date, total_amount, invoice_data FROM invoices"
+        revenue_map = {m: 0.0 for m in range(1, 13)}
+        
         try:
             with self._connect() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as c:
-                    c.execute(query, (pattern,))
-                    return [{"month": int(r["month"]), "revenue": r["revenue"]} for r in c.fetchall() if r["month"] and r["month"].isdigit()]
+                    c.execute(query)
+                    rows = c.fetchall()
+            
+            for r in rows:
+                try:
+                    raw_data = r["invoice_data"]
+                    if isinstance(raw_data, str):
+                        data = json.loads(raw_data)
+                    else:
+                        data = raw_data 
+                        
+                    w_date_str = data.get("meta", {}).get("wedding_date", "")
+                    
+                    dt = None
+                    if w_date_str:
+                        for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                            try:
+                                dt = datetime.strptime(w_date_str, fmt)
+                                break
+                            except: continue
+                    
+                    # Fallback to Creation Date
+                    if not dt and r['date']:
+                        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+                            try:
+                                dt = datetime.strptime(str(r['date']), fmt)
+                                break
+                            except: continue
+                    
+                    if dt and dt.year == year:
+                        revenue_map[dt.month] += r["total_amount"]
+                except:
+                    continue
+            
+            return [{"month": m, "revenue": revenue_map[m]} for m in range(1, 13)]
+
         except Exception as e:
-            print(f"[DB] Analytics Trend Error: {e}")
+            print(f"[Postgres] Analytics Trend Error: {e}")
             return []
 
     def get_analytics_top_packages(self, limit: int = 5) -> List[Dict[str, Any]]:
@@ -885,61 +1019,113 @@ class PostgresAdapter(DatabaseAdapter):
             return []
 
     def get_monthly_report_data(self, year: int, month: int) -> List[Dict[str, Any]]:
-        pattern = f"{year}-{month:02d}-%"
-        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices WHERE date LIKE %s ORDER BY date ASC"
+        # Fetch ALL, filter in Python by wedding_date
+        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices"
         result = []
         try:
             with self._connect() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as c:
-                    c.execute(query, (pattern,))
+                    c.execute(query)
                     rows = c.fetchall()
             
             for r in rows:
                 try:
-                    data = json.loads(r["invoice_data"])
+                    raw_data = r["invoice_data"]
+                    if isinstance(raw_data, str):
+                        data = json.loads(raw_data)
+                    else:
+                        data = raw_data
+
                     meta = data.get("meta", {})
-                    result.append({
-                        "id": r['id'],
-                        "invoice_no": r['invoice_no'],
-                        "client": r['client_name'],
-                        "created_date": r['date'],
-                        "event_date": meta.get("wedding_date", ""),
-                        "venue": meta.get("venue", "Unknown"),
-                        "amount": r['total_amount'],
-                        "meta": meta
-                    })
-                except:
-                    continue
+                    w_date_str = meta.get("wedding_date", "")
+                    
+                    dt = None
+                    if w_date_str:
+                         for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                            try:
+                                dt = datetime.strptime(w_date_str, fmt)
+                                break
+                            except: continue
+                    
+                    # Fallback to Creation Date
+                    if not dt and r['date']:
+                        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+                            try:
+                                dt = datetime.strptime(str(r['date']), fmt)
+                                break
+                            except: continue
+                    
+                    if dt and dt.year == year and dt.month == month:
+                        result.append({
+                            "id": r['id'],
+                            "invoice_no": r['invoice_no'],
+                            "client": r['client_name'],
+                            "created_date": r['date'],
+                            "event_date": dt.strftime("%d %B %Y"),
+                            "venue": meta.get("venue", "Unknown"),
+                            "amount": r['total_amount'],
+                            "meta": meta,
+                            "_sort_date": dt
+                        })
+                except: continue
+            
+            result.sort(key=lambda x: x["_sort_date"])
             return result
         except Exception:
             return []
 
     def get_yearly_report_data(self, year: int) -> List[Dict[str, Any]]:
-        pattern = f"{year}-%"
-        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices WHERE date LIKE %s ORDER BY date ASC"
+        # Fetch ALL, filter in Python by wedding_date
+        query = "SELECT id, invoice_no, client_name, date, total_amount, invoice_data FROM invoices"
         result = []
         try:
             with self._connect() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as c:
-                    c.execute(query, (pattern,))
+                    c.execute(query)
                     rows = c.fetchall()
             
             for r in rows:
                 try:
-                    data = json.loads(r["invoice_data"])
+                    raw_data = r["invoice_data"]
+                    if isinstance(raw_data, str):
+                        data = json.loads(raw_data)
+                    else:
+                        data = raw_data
+                        
                     meta = data.get("meta", {})
-                    result.append({
-                        "id": r['id'],
-                        "invoice_no": r['invoice_no'],
-                        "client": r['client_name'],
-                        "created_date": r['date'],
-                        "event_date": meta.get("wedding_date", ""),
-                        "venue": meta.get("venue", "Unknown"),
-                        "amount": r['total_amount'],
-                        "meta": meta
-                    })
-                except:
-                    continue
+                    w_date_str = meta.get("wedding_date", "")
+                    
+                    dt = None
+                    if w_date_str:
+                         for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                            try:
+                                dt = datetime.strptime(w_date_str, fmt)
+                                break
+                            except: continue
+                    
+                    # Fallback to Creation Date
+                    if not dt and r['date']:
+                        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+                            try:
+                                dt = datetime.strptime(str(r['date']), fmt)
+                                break
+                            except: continue
+
+                    if dt and dt.year == year:
+                        result.append({
+                            "id": r['id'],
+                            "invoice_no": r['invoice_no'],
+                            "client": r['client_name'],
+                            "created_date": r['date'],
+                            "event_date": dt.strftime("%d %B %Y"),
+                            "venue": meta.get("venue", "Unknown"),
+                            "amount": r['total_amount'],
+                            "meta": meta,
+                            "_sort_date": dt
+                        })
+                except: continue
+            
+            result.sort(key=lambda x: x["_sort_date"])
             return result
         except Exception:
             return []
