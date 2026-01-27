@@ -21,6 +21,18 @@ from modules import db
 def render_page() -> None:
     # 1. Initialize System
     initialize_session_state()
+    # FORCE: Ensure critical state exists even if init logic was cached/skipped
+    # Check if empty BEFORE ensuring, so we know if we need to refresh widgets
+    was_empty = not st.session_state.get("inv_no")
+    
+    from modules.invoice_state import ensure_invoice_no_exists
+    ensure_invoice_no_exists()
+    
+    # If it WAS empty, it means we just generated a new one.
+    # We must RERUN to force text_input widget to pick up the new value from session state.
+    if was_empty and st.session_state.get("inv_no"):
+         st.rerun()
+    
     inject_styles()
     
     # 2. Redirect Handler (e.g. after Save)
