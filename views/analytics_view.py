@@ -355,6 +355,8 @@ def _get_yearly_report_pdf(year: int) -> Optional[bytes]:
         
         return pdf_report.generate_yearly_report(data, year, chart_data=chart_data).getvalue()
     except Exception as e:
+        # Cache-safe logging? No, but st.error works on first run
+        # We print to console for cloud logs
         print(f"Error generating yearly report: {e}")
         return None
 
@@ -480,18 +482,21 @@ def render_page() -> None:
             st.markdown(f"<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
             
             # PDF Download
-            pdf_bytes = _get_yearly_report_pdf(selected_year)
-            if pdf_bytes:
-                st.download_button(
-                    "📥 Download Report",
-                    data=pdf_bytes,
-                    file_name=f"Report_{selected_year}.pdf",
-                    mime='application/pdf',
-                    key=f'yr_{selected_year}',
-                    use_container_width=True
-                )
-            else:
-                st.button("📥 No Data", disabled=True, use_container_width=True, key=f"no_yr_{selected_year}")
+            try:
+                pdf_bytes = _get_yearly_report_pdf(selected_year)
+                if pdf_bytes:
+                    st.download_button(
+                        "📥 Download Report",
+                        data=pdf_bytes,
+                        file_name=f"Report_{selected_year}.pdf",
+                        mime='application/pdf',
+                        key=f'yr_{selected_year}',
+                        use_container_width=True
+                    )
+                else:
+                    st.button("📥 No Data", disabled=True, use_container_width=True, key=f"no_yr_{selected_year}")
+            except Exception as e:
+                st.error(f"Generate Failed: {e}")
             
             st.markdown("<div style='height:4px; width:100%; background:#bbf7d0; margin-top:10px; border-radius:2px;'></div>", unsafe_allow_html=True)
     
@@ -528,18 +533,21 @@ def render_page() -> None:
             
             st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
             
-            pdf_bytes_mo = _get_monthly_report_pdf(selected_year, selected_month)
-            if pdf_bytes_mo:
-                st.download_button(
-                    "📥 Download Report",
-                    data=pdf_bytes_mo,
-                    file_name=f"Report_{selected_year}_{selected_month:02d}.pdf",
-                    mime='application/pdf',
-                    key=f'mo_{selected_year}_{selected_month}',
-                    use_container_width=True
-                )
-            else:
-                st.button("📥 No Data", disabled=True, use_container_width=True, key=f"no_mo_{selected_year}_{selected_month}")
+            try:
+                pdf_bytes_mo = _get_monthly_report_pdf(selected_year, selected_month)
+                if pdf_bytes_mo:
+                    st.download_button(
+                        "📥 Download Report",
+                        data=pdf_bytes_mo,
+                        file_name=f"Report_{selected_year}_{selected_month:02d}.pdf",
+                        mime='application/pdf',
+                        key=f'mo_{selected_year}_{selected_month}',
+                        use_container_width=True
+                    )
+                else:
+                    st.button("📥 No Data", disabled=True, use_container_width=True, key=f"no_mo_{selected_year}_{selected_month}")
+            except Exception as e:
+                st.error(f"Generate Failed: {e}")
             
             st.markdown("<div style='height:4px; width:100%; background:#e9d5ff; margin-top:10px; border-radius:2px;'></div>", unsafe_allow_html=True)
     
