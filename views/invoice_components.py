@@ -437,27 +437,29 @@ def render_payment_section(grand_total: float) -> None:
             if current_amt > 0:
                 st.caption(f"Rp {int(current_amt):,}".replace(",", "."))
         # Add Term Button (max 6 terms)
+        # Action Buttons (Compact Layout)
         st.write("")
-        if len(terms) < 6:
-            if st.button("➕ Add Payment Term", use_container_width=True):
-                new_id = f"t{len(terms)+1}_{datetime.now().strftime('%H%M%S')}"
-                # Insert before Pelunasan (last locked term)
-                pelunasan_idx = next((i for i, t in enumerate(terms) if t.get("id") == "full"), len(terms))
-                new_term = {"id": new_id, "label": f"Payment {len(terms)}", "amount": 0, "locked": False}
-                st.session_state["payment_terms"].insert(pelunasan_idx, new_term)
-                invalidate_pdf()
-                st.rerun()
+        c_act1, c_act2 = st.columns(2)
         
-        # Action Buttons
-        st.write("")
-        # Dynamic logic for split buttons needing current grand total
-        st.button(
-            "Fill Remaining → Pelunasan",
-            on_click=cb_fill_remaining_payment,
-            args=(grand_total,),
-            disabled=(grand_total <= 0),
-            use_container_width=True,
-        )
+        with c_act1:
+            if len(terms) < 6:
+                if st.button("➕ Add Payment Term", use_container_width=True):
+                    new_id = f"t{len(terms)+1}_{datetime.now().strftime('%H%M%S')}"
+                    # Insert before Pelunasan (last locked term)
+                    pelunasan_idx = next((i for i, t in enumerate(terms) if t.get("id") == "full"), len(terms))
+                    new_term = {"id": new_id, "label": f"Payment {len(terms)}", "amount": 0, "locked": False}
+                    st.session_state["payment_terms"].insert(pelunasan_idx, new_term)
+                    invalidate_pdf()
+                    st.rerun()
+        
+        with c_act2:
+            st.button(
+                "Fill Remaining → Pelunasan",
+                on_click=cb_fill_remaining_payment,
+                args=(grand_total,),
+                disabled=(grand_total <= 0),
+                use_container_width=True,
+            )
     # === TAB 2: PROOF ===
     with tab_proof:
         st.write("")
@@ -600,61 +602,62 @@ def render_download_section() -> None:
         st.markdown("<div class='blk-title'>✅ PDF Ready</div>", unsafe_allow_html=True)
         
         col_dl, col_new = st.columns([2, 1])
-        with col_dl:
-            st.download_button(
-                label="⬇️ Download PDF",
-                data=pdf_bytes,
-                file_name=file_name,
-                mime="application/pdf",
-                type="primary", 
-                use_container_width=True
-            )
-            
-            # --- ACTION BUTTONS (Restored) ---
-            c_act1, c_act2 = st.columns(2)
-            is_editing = st.session_state.get("editing_invoice_id")
-            
-            with c_act1:
-                # Save / Update Logic
-                if is_editing:
-                    st.button(
-                        "💾 Update History", 
-                        use_container_width=True,
-                        on_click=handle_save_history,
-                        args=(inv_no, True)
-                    )
-                else:
-                    st.button(
-                        "💾 Save to History", 
-                        use_container_width=True,
-                        on_click=handle_save_history,
-                        args=(inv_no, False)
-                    )
+        # REFACTOR: Full Width Download, then 3 actions below
+        st.download_button(
+            label="⬇️ Download PDF",
+            data=pdf_bytes,
+            file_name=file_name,
+            mime="application/pdf",
+            type="primary", 
+            use_container_width=True
+        )
+        st.write("")
+        
+        # --- ACTION BUTTONS (Symmetrical Grid) ---
+        c_act1, c_act2, c_act3 = st.columns(3)
+        is_editing = st.session_state.get("editing_invoice_id")
+        
+        with c_act1:
+            # Save / Update Logic
+            if is_editing:
+                st.button(
+                    "💾 Update History", 
+                    use_container_width=True,
+                    on_click=handle_save_history,
+                    args=(inv_no, True)
+                )
+            else:
+                st.button(
+                    "💾 Save to History", 
+                    use_container_width=True,
+                    on_click=handle_save_history,
+                    args=(inv_no, False)
+                )
 
-            with c_act2:
-                # WhatsApp Share Logic
-                if st.button("📤 Share to WA", use_container_width=True):
-                    # Prepare WA Link
-                    client_name = st.session_state.get("inv_client_name", "-")
-                    
-                    # Get template
-                    raw_tmpl = st.session_state.get("wa_template", "")
-                    if not raw_tmpl:
-                         raw_tmpl = db.get_config("wa_template_default") or "Halo {nama}, Invoice {inv_no} sudah ready."
-                    
-                    # Replace placeholders
-                    msg = raw_tmpl.replace("{nama}", client_name).replace("{inv_no}", inv_no)
-                    
-                    # Encode
-                    import urllib.parse
-                    encoded_msg = urllib.parse.quote(msg)
-                    
-                    phone = st.session_state.get("inv_client_phone", "")
-                    if phone.startswith("0"):
-                        phone = "62" + phone[1:]
-                    
-                    wa_url = f"https://wa.me/{phone}?text={encoded_msg}"
-                    open_wa_dialog(wa_url)
+        with c_act2:
+            # WhatsApp Share Logic
+            if st.button("📤 Share to WA", use_container_width=True):
+                # Prepare WA Link
+                client_name = st.session_state.get("inv_client_name", "-")
+                
+                # Get template
+                raw_tmpl = st.session_state.get("wa_template", "")
+                if not raw_tmpl:
+                        raw_tmpl = db.get_config("wa_template_default") or "Halo {nama}, Invoice {inv_no} sudah ready."
+                
+                # Replace placeholders
+                msg = raw_tmpl.replace("{nama}", client_name).replace("{inv_no}", inv_no)
+                
+                # Encode
+                import urllib.parse
+                encoded_msg = urllib.parse.quote(msg)
+                
+                phone = st.session_state.get("inv_client_phone", "")
+                if phone.startswith("0"):
+                    phone = "62" + phone[1:]
+                
+                wa_url = f"https://wa.me/{phone}?text={encoded_msg}"
+                open_wa_dialog(wa_url)
 
-        with col_new:
-            st.button("🆕 New Invoice", use_container_width=True, on_click=cb_reset_transaction)
+        with c_act3:
+             st.button("🆕 New Invoice", use_container_width=True, on_click=cb_reset_transaction)
