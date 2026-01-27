@@ -1,7 +1,6 @@
 import streamlit as st
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
-
 from modules import db
 from modules.utils import (
     sanitize_text, 
@@ -29,7 +28,6 @@ from controllers.invoice_callbacks import (
     cb_update_item_qty,
     cb_delete_item,
     cb_update_bundle_price,
-
     cb_fill_remaining_payment,
     cb_merge_selected_from_ui,
     cb_unmerge_bundle,
@@ -38,18 +36,15 @@ from controllers.invoice_callbacks import (
     action_generate_pdf,
     handle_save_history,
     cb_reset_transaction,
-    cb_save_defaults
+    cb_save_defaults,
+    cb_client_name_changed
 )
-
 # --- Constants & Helpers ---
-
 PAYMENT_STEP = 1_000_000
-
 try:
     from views.packages_view import CATEGORIES
 except ImportError:
     CATEGORIES = ["Utama", "Bonus"]
-
 def payment_integrity_status(
     grand_total: float,
     dp1: int,
@@ -59,7 +54,6 @@ def payment_integrity_status(
 ) -> Tuple[str, str, int]:
     total_scheduled = int(dp1) + int(term2) + int(term3) + int(full)
     balance = int(grand_total) - total_scheduled
-
     if grand_total <= 0:
         return "INFO", "Add items to cart to calculate payments.", balance
     if balance == 0:
@@ -67,43 +61,43 @@ def payment_integrity_status(
     if balance > 0:
         return "UNALLOCATED", f"{rupiah(balance)} remaining.", balance
     return "OVER", f"{rupiah(abs(balance))} excess.", balance
-
 # --- Components ---
-
 # Sidebar logic moved to views/sidebar_components.py
-
-
-
-
 def render_event_metadata() -> None:
     # --- Section: Event & Client ---
     st.markdown('<div class="sidebar-header"><h3>📝 Event Details</h3></div>', unsafe_allow_html=True)
-    st.write("")
+    # Spacer removed based on user feedback (too much empty space)
     
-    # Event Row - symmetric columns
-    c1, c2, c3 = st.columns([1, 1, 1])
-    c1.text_input("Invoice No", key="inv_no", on_change=invalidate_pdf)
-    c2.date_input("Wedding Date", key="inv_wedding_date", on_change=invalidate_pdf)
-    c3.text_input("Venue", key="inv_venue", placeholder="Hotel/Gedung", on_change=invalidate_pdf)
-    
-    # Client Row - with phone for WhatsApp
-    c4, c5, c6 = st.columns([1, 1, 1])
-    c4.text_input("Event / Title", key="inv_title", placeholder="e.g. Wedding Reception 2026", on_change=invalidate_pdf)
-    c5.text_input("Client Name", key="inv_client_name", placeholder="CPW & CPP", on_change=invalidate_pdf)
-    
-    # WhatsApp with number-only validation
-    def sanitize_phone():
-        import re
-        current = st.session_state.get("inv_client_phone", "")
-        cleaned = re.sub(r"[^0-9]", "", current)
-        if cleaned != current:
-            st.session_state["inv_client_phone"] = cleaned
-        invalidate_pdf()
-    
-    c6.text_input("Client WhatsApp", key="inv_client_phone", placeholder="6281234567890", on_change=sanitize_phone)
+    # Use a container for better grouping
+    # Use a container for better grouping
+    with st.container():
+        # Row 1: Core Event Data
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.text_input("Invoice No", key="inv_no", placeholder="e.g. INV/2026/001", on_change=invalidate_pdf, help="To change the starting sequence (e.g. to 250), go to System Tools in the Sidebar.")
+        with c2:
+            st.date_input("Wedding Date", key="inv_wedding_date", on_change=invalidate_pdf)
+        with c3:
+            st.text_input("Venue", key="inv_venue", placeholder="e.g. Grand Ballroom Hotel Mulia", on_change=invalidate_pdf)
+        # Row 2: Client & Context
+        c4, c5, c6 = st.columns(3)
+        with c4:
+             st.text_input("Client Name", key="inv_client_name", placeholder="e.g. Romeo & Juliet", on_change=cb_client_name_changed)
+        with c5:
+            # WhatsApp with number-only validation
+            def sanitize_phone():
+                import re
+                current = st.session_state.get("inv_client_phone", "")
+                cleaned = re.sub(r"[^0-9]", "", current)
+                if cleaned != current:
+                    st.session_state["inv_client_phone"] = cleaned
+                invalidate_pdf()
+            
+            st.text_input("Client WhatsApp", key="inv_client_phone", placeholder="e.g. 08123456789", on_change=sanitize_phone)
+        with c6:
+             st.text_input("Event / Title", key="inv_title", placeholder="e.g. Wedding Reception 2026", on_change=invalidate_pdf)
     
     st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
-
     # Banking & WhatsApp Config (Collapsible)
     # Trick: Use a dynamic key to force reset (collapse) after save
     if "_config_exp_key" not in st.session_state:
@@ -117,7 +111,6 @@ def render_event_metadata() -> None:
             b_col1.text_input("Bank Name", key="bank_nm", on_change=invalidate_pdf)
             b_col2.text_input("Account No", key="bank_ac", on_change=invalidate_pdf)
             b_col3.text_input("Account Holder", key="bank_an", on_change=invalidate_pdf)
-
         with tab_terms:
             st.text_area("Terms & Conditions", key="inv_terms", height=120, on_change=invalidate_pdf)
             
@@ -143,7 +136,6 @@ def render_event_metadata() -> None:
         st.write("")
         if st.button("💾 Save as Default", help="Save these settings as new system defaults"):
             cb_save_defaults()
-
 def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> None:
     # --- Section: Bill Items ---
     st.markdown('<div class="sidebar-header"><h3>🛒 Bill Items</h3></div>', unsafe_allow_html=True)
@@ -176,7 +168,6 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
         """, 
         unsafe_allow_html=True
     )
-
     # 2) Items Loop
     items = st.session_state.get("inv_items", [])
     if not items:
@@ -230,13 +221,11 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
                              st.markdown(f"<div style='font-size:0.75rem; color:#6b7280; line-height:1.2; margin-left:4px;'>• {line}</div>", unsafe_allow_html=True)
                         if len(lines) > 3:
                              st.markdown(f"<div style='font-size:0.7rem; color:#9ca3af; margin-left:4px; font-style:italic;'>+ {len(lines)-3} items...</div>", unsafe_allow_html=True)
-
                     if is_bundle:
                         st.caption("Bundled Item")
                         if st.button("Unmerge", key=f"unmerge_{item_id}", help="Revert to original items"):
                             cb_unmerge_bundle(item_id)
                             st.rerun()
-
             # Col 2: Price (Editable for Bundles)
             with c2:
                 if is_bundle:
@@ -267,11 +256,9 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
                     on_change=cb_update_item_qty,
                     args=(item_id, k_qty)
                 )
-
             # Col 4: Total
             with c4:
                 st.write(rupiah(item.get("Total", 0)))
-
             # Col 5: Delete
             with c5:
                 st.button(
@@ -333,7 +320,6 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
         st.markdown(html_grand, unsafe_allow_html=True)
         
     st.markdown("</div>", unsafe_allow_html=True) # End Section
-
 def render_payment_section(grand_total: float) -> None:
     # --- Section: Payment (Unified) ---
     st.markdown('<div class="sidebar-header"><h3>💳 Payment Manager</h3></div>', unsafe_allow_html=True)
@@ -341,7 +327,6 @@ def render_payment_section(grand_total: float) -> None:
     st.write("")
     
     tab_schedule, tab_proof = st.tabs(["💳 Schedule", "📸 Proof"])
-
     # === TAB 1: SCHEDULE ===
     with tab_schedule:
         st.write("")
@@ -364,7 +349,6 @@ def render_payment_section(grand_total: float) -> None:
             status, msg = "OVER", f"Over by: Rp {abs(remaining):,.0f}".replace(",", ".")
         
         badge_cls = {"BALANCED": "badg-green", "UNALLOCATED": "badg-orange", "OVER": "badg-red", "INFO": "badg-blue"}.get(status, "badg-blue")
-
         # Status Bar
         st.markdown(
             f"""
@@ -380,7 +364,6 @@ def render_payment_section(grand_total: float) -> None:
             """,
             unsafe_allow_html=True,
         )
-
         # Dynamic Payment Terms UI
         for idx, term in enumerate(terms):
             term_id = term.get("id", f"term_{idx}")
@@ -439,7 +422,6 @@ def render_payment_section(grand_total: float) -> None:
             current_amt = st.session_state.get(amt_key, term.get("amount", 0))
             if current_amt > 0:
                 st.caption(f"Rp {int(current_amt):,}".replace(",", "."))
-
         # Add Term Button (max 6 terms)
         st.write("")
         if len(terms) < 6:
@@ -462,7 +444,6 @@ def render_payment_section(grand_total: float) -> None:
             disabled=(grand_total <= 0),
             use_container_width=True,
         )
-
     # === TAB 2: PROOF ===
     with tab_proof:
         st.write("")
@@ -484,7 +465,6 @@ def render_payment_section(grand_total: float) -> None:
                             st.session_state["pp_cached"] = current_proofs
                             st.rerun()
             st.divider()
-
         # 2. UPLOADER (Bottom)
         uploader_key = f"pp_uploader_{st.session_state.get('uploader_key', 0)}"
         pp_files = st.file_uploader(
@@ -524,14 +504,12 @@ def render_payment_section(grand_total: float) -> None:
             
             # Don't reset uploader - let Streamlit's native preview persist
             # Files are already deduplicated, so re-runs won't duplicate
-
 @st.dialog("📤 Kirim via WhatsApp")
 def open_wa_dialog(wa_url: str):
     st.warning("⚠️ **PENTING**: File PDF **TIDAK** otomatis terkirim.")
     st.write("Silakan klik tombol di bawah untuk membuka chat, lalu **lampirkan file PDF** yang sudah Anda download secara manual.")
     st.write("")
     st.link_button("🚀 Lanjut ke WhatsApp", wa_url, use_container_width=True)
-
 def render_action_buttons(subtotal: float, grand_total: float) -> None:
     st.write("")
     
@@ -545,14 +523,14 @@ def render_action_buttons(subtotal: float, grand_total: float) -> None:
     missing_fields = []
     if not inv_no:
         missing_fields.append("**Invoice No**")
-    if not event_title:
-        missing_fields.append("**Event Title**")
+    # if not event_title:
+    #     missing_fields.append("**Event Title**")
     if not client_name:
         missing_fields.append("**Client Name**")
     if not venue:
         missing_fields.append("**Venue**")
-    if not client_phone:
-        missing_fields.append("**Client WhatsApp**")
+    # if not client_phone:
+    #     missing_fields.append("**Client WhatsApp**")
     
     if missing_fields:
         st.warning(f"⚠️ Please fill in: {', '.join(missing_fields)}")
@@ -560,13 +538,11 @@ def render_action_buttons(subtotal: float, grand_total: float) -> None:
     else:
         if st.button("📄 Generate Invoice PDF", type="primary", use_container_width=True):
             action_generate_pdf(subtotal, grand_total)
-
 def render_download_section() -> None:
     pdf_data = st.session_state.get("generated_pdf_bytes")
     # Clean PDF bytes validation
     if not pdf_data:
         return
-
     try:
         if hasattr(pdf_data, "read"):
             pdf_data.seek(0)
@@ -575,67 +551,88 @@ def render_download_section() -> None:
             pdf_bytes = pdf_data if isinstance(pdf_data, (bytes, bytearray)) else b""
     except Exception:
         pdf_bytes = b""
-
     if not pdf_bytes:
         return
-
     inv_no = str(st.session_state.get("inv_no", "INV"))
     file_name = f"{make_safe_filename(inv_no, prefix='INV')}.pdf"
     
+    # Determine Status Suffix (DP / LUNAS)
+    payments = st.session_state.get("payment_terms", [])
+    suffix = ""
+    
+    try:
+        # Find "Pelunasan" (id='full')
+        pelunasan = next((t for t in payments if t.get("id") == "full"), None)
+        has_pelunasan = pelunasan and int(float(pelunasan.get("amount", 0))) > 0
+        
+        # Check DP (any term before Full that has amount > 0)
+        has_dp = any(int(float(t.get("amount", 0))) > 0 for t in payments if t.get("id") != "full")
+        
+        if has_pelunasan:
+            # If Pelunasan is filled, it's FULL/LUNAS
+            # Check if there were other terms to distinguish "Direct Full" vs "Final Payment"
+            # But simpler is better: if Pelunasan > 0 -> LUNAS
+            suffix = "_LUNAS"
+        elif has_dp:
+            suffix = "_DP"
+            
+    except Exception:
+        pass # Fallback to no suffix
+        
+    safe_base = make_safe_filename(inv_no, prefix='INV')
+    file_name = f"{safe_base}{suffix}.pdf"
+    
     with st.container(border=True):
         st.markdown("<div class='blk-title'>✅ PDF Ready</div>", unsafe_allow_html=True)
+        
+        col_dl, col_new = st.columns([2, 1])
+        with col_dl:
+            st.download_button(
+                label="⬇️ Download PDF",
+                data=pdf_bytes,
+                file_name=file_name,
+                mime="application/pdf",
+                type="primary", 
+                use_container_width=True
+            )
+            
+            # --- ACTION BUTTONS (Restored) ---
+            c_act1, c_act2 = st.columns(2)
+            is_editing = st.session_state.get("editing_invoice_id")
+            
+            with c_act1:
+                # Save / Update Logic
+                if is_editing:
+                    if st.button("💾 Update History", use_container_width=True):
+                        handle_save_history(inv_no, is_update=True)
+                else:
+                    if st.button("💾 Save to History", use_container_width=True):
+                        handle_save_history(inv_no, is_update=False)
 
-        col1, col2 = st.columns(2, gap="small")
+            with c_act2:
+                # WhatsApp Share Logic
+                if st.button("📤 Share to WA", use_container_width=True):
+                    # Prepare WA Link
+                    client_name = st.session_state.get("inv_client_name", "-")
+                    
+                    # Get template
+                    raw_tmpl = st.session_state.get("wa_template", "")
+                    if not raw_tmpl:
+                         raw_tmpl = db.get_config("wa_template_default") or "Halo {nama}, Invoice {inv_no} sudah ready."
+                    
+                    # Replace placeholders
+                    msg = raw_tmpl.replace("{nama}", client_name).replace("{inv_no}", inv_no)
+                    
+                    # Encode
+                    import urllib.parse
+                    encoded_msg = urllib.parse.quote(msg)
+                    
+                    phone = st.session_state.get("inv_client_phone", "")
+                    if phone.startswith("0"):
+                        phone = "62" + phone[1:]
+                    
+                    wa_url = f"https://wa.me/{phone}?text={encoded_msg}"
+                    open_wa_dialog(wa_url)
 
-        col1.download_button(
-            "📥 Download",
-            data=pdf_bytes,
-            file_name=file_name,
-            mime="application/pdf",
-            use_container_width=True,
-        )
-
-        # WhatsApp Share Logic
-        phone = (st.session_state.get("inv_client_phone") or "").strip()
-        # Basic sanitization for WA link (remove non-digits)
-        import re
-        safe_phone = re.sub(r"[^0-9]", "", phone)
-        if safe_phone.startswith("0"): 
-             safe_phone = "62" + safe_phone[1:] # Assume ID if starts with 0
-        
-        wa_tpl = st.session_state.get("wa_template", "")
-        # Fill template
-        msg = wa_tpl.format(
-            nama=st.session_state.get("inv_client_name", "Kak"),
-            inv_no=st.session_state.get("inv_no", "-")
-        )
-        # Force clean corruption characters
-        msg = msg.replace("\ufffd", " ")
-        
-        import urllib.parse
-        encoded_msg = urllib.parse.quote(msg)
-        
-        # Logic: If phone exists -> Direct Chat. If not -> Contact Picker.
-        if safe_phone:
-            wa_url = f"https://wa.me/{safe_phone}?text={encoded_msg}"
-        else:
-            wa_url = f"https://api.whatsapp.com/send?text={encoded_msg}"
-        
-        with col2:
-            if st.button("📱 Open WhatsApp", use_container_width=True):
-                open_wa_dialog(wa_url)
-        
-        # Row 2: Save to History + Start New
-        save_col, new_col = st.columns(2)
-        
-        edit_id = st.session_state.get("editing_invoice_id")
-        save_label = f"💾 Update to History" if edit_id else "💾 Save to History"
-        
-        with save_col:
-            email_recipient = (st.session_state.get("inv_client_email") or "").strip()
-            if st.button(save_label, use_container_width=True):
-                handle_save_history(inv_no, email_recipient, pdf_bytes)
-                st.rerun()  # Redirect to History
-                
-        with new_col:
+        with col_new:
             st.button("🆕 New Invoice", use_container_width=True, on_click=cb_reset_transaction)
