@@ -132,8 +132,17 @@ def initialize_session_state() -> None:
                 # Format: INV{seq} (Padding 5 digits)
                 defaults["inv_no"] = f"INV{draft_seq:05d}"
             except Exception as e:
-                print(f"Auto-gen failed: {e}")
-                pass
+                # Debug logging visible to user
+                st.toast(f"⚠️ Auto-gen failed: {e}. Using fallback.", icon="⚠️")
+                
+                # Professional Fallback: INV + Compact Timestamp
+                # e.g. INV2601271401
+                ts_suffix = datetime.now().strftime("%y%m%d%H%M") 
+                defaults["inv_no"] = f"INV{ts_suffix}"
+            
+            # FORCE UPDATE: If key exists but is empty, the loop below won't touch it.
+            # So we must set it here explicitly.
+            st.session_state["inv_no"] = defaults["inv_no"]
 
     for k, v in defaults.items():
         if k not in st.session_state:
