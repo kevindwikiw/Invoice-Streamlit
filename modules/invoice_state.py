@@ -60,6 +60,31 @@ def get_dashboard_stats_cached() -> Dict[str, Any]:
 def get_config_cached(key: str, default: Any = None) -> Any:
     return db.get_config(key, default)
 
+def ensure_invoice_no_exists():
+    """Guarantees that inv_no is populated in session state. Use fallback if DB fails."""
+    if st.session_state.get("inv_no"):
+        return
+
+    try:
+        # Optimized: Use cached config to avoid DB hit on every refresh
+        current_seq_str = get_config_cached("inv_seq_global", "0")
+        draft_seq = int(current_seq_str) + 1 if str(current_seq_str).isdigit() else 1
+        
+        st.session_state["_draft_global_seq"] = draft_seq
+        
+        # Format: INV{seq} (Padding 5 digits)
+        new_no = f"INV{draft_seq:05d}"
+        st.session_state["inv_no"] = new_no
+        
+    except Exception as e:
+        # Debug logging visible to user
+        st.toast(f"⚠️ Auto-gen failed: {e}. Using fallback.", icon="⚠️")
+        
+        # Professional Fallback: INV + Compact Timestamp
+        # e.g. INV2601271401
+        ts_suffix = datetime.now().strftime("%y%m%d%H%M") 
+        st.session_state["inv_no"] = f"INV{ts_suffix}"
+
 def initialize_session_state() -> None:
     # Load custom defaults from DB
     db_conf = load_db_settings()
@@ -80,7 +105,7 @@ def initialize_session_state() -> None:
 
         # Invoice Metadata
         "inv_title": "",
-        "inv_no": "",  # Will be populated below if empty
+        # "inv_no": "",  # REMOVED from defaults, handled by ensure_invoice_no_exists
         "inv_client_name": "",
         "inv_client_phone": "",
         "inv_client_email": "",
@@ -108,45 +133,17 @@ def initialize_session_state() -> None:
         "uploader_key": 0,
     }
 
-    # --- Auto-Gen Logic (Draft) ---
-    # If starting fresh (no invoice number), fetch next global sequence
-    if not defaults["inv_no"]:
-        # Only if not already in session (to avoid burning sequence on refresh)
-        if "inv_no" not in st.session_state or not st.session_state["inv_no"]:
-            # Try get sequence from DB
-            try:
-                # We peek/get next sequence. Note: This increments the counter DB side!
-                # If user cancels, we burn a number. Acceptable for simple usage.
-                # To prevent burning on every tab refresh without saving, we could store 'last_draft_seq' in session_state?
-                # But st.session_state persists per session.
-                # If user hits F5, session state might reset if not configured? No, local Streamlit usually keeps it.
-                # Let's check if we have a draft seq
-                draft_seq = st.session_state.get("_draft_global_seq")
-                if not draft_seq:
-                    # Optimized: Use cached config to avoid DB hit on every refresh
-                    current_seq_str = get_config_cached("inv_seq_global", "0")
-                    draft_seq = int(current_seq_str) + 1 if str(current_seq_str).isdigit() else 1
-                    
-                    st.session_state["_draft_global_seq"] = draft_seq
-                
-                # Format: INV{seq} (Padding 5 digits)
-                defaults["inv_no"] = f"INV{draft_seq:05d}"
-            except Exception as e:
-                # Debug logging visible to user
-                st.toast(f"⚠️ Auto-gen failed: {e}. Using fallback.", icon="⚠️")
-                
-                # Professional Fallback: INV + Compact Timestamp
-                # e.g. INV2601271401
-                ts_suffix = datetime.now().strftime("%y%m%d%H%M") 
-                defaults["inv_no"] = f"INV{ts_suffix}"
-            
-            # FORCE UPDATE: If key exists but is empty, the loop below won't touch it.
-            # So we must set it here explicitly.
-            st.session_state["inv_no"] = defaults["inv_no"]
-
+    # Apply defaults if key missing
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+            
+    # Ensure Invoice No Exists (Force Generation if empty)
+    ensure_invoice_no_exists()
+    # Double check emptiness (e.g. if key existed but was "")
+    if not st.session_state.get("inv_no"):
+         st.session_state.pop("inv_no", None) # Clear invalid empty string
+         ensure_invoice_no_exists() # Retry
 
     # Ensure inv_items is a list
     if not isinstance(st.session_state["inv_items"], list):
