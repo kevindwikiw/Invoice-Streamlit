@@ -306,11 +306,13 @@ def generate_pdf_bytes(meta: dict, items: list, grand_total: int) -> BytesIO:
     invoice_title_text = "INVOICE"
     c.setFillColor(WHITE)
     c.setFont("Times-Bold", 22)
-    c.drawRightString(W - margin, H - 20 * mm, invoice_title_text)
+    # Centered Vertical alignment with Logo: Bar center is H-12.5mm. 
+    # Text Baseline at H-16mm puts center roughly at H-12.5mm
+    c.drawRightString(W - margin, H - 16 * mm, invoice_title_text)
     
     title_width = c.stringWidth(invoice_title_text, "Times-Bold", 22)
     c.setLineWidth(1)
-    c.line(W - margin - title_width, H - 22 * mm, W - margin, H - 22 * mm)
+    c.line(W - margin - title_width, H - 18 * mm, W - margin, H - 18 * mm)
 
     # =========================================================
     # 2. METADATA
