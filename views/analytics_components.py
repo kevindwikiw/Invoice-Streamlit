@@ -263,35 +263,112 @@ def render_event_calendar(bookings_curr: List[Dict], selected_year: int) -> None
 
     st.markdown(f"<div style='margin-top: {SECTION_GAP};'></div>", unsafe_allow_html=True)
 
+    # Initialize pagination state
+    if "cal_offset" not in st.session_state:
+        st.session_state["cal_offset"] = 0
+
     cc1, cc2 = st.columns([2, 1])
     with cc1:
         st.subheader(f"📅 Event Calendar ({selected_year})")
     with cc2:
-        show_full_year = st.toggle("Show Full Year", value=False, help="Toggle to show all 12 months or just active months")
-
+        show_full_year = st.toggle("Show Full Year", value=False, help="Toggle to show all 12 months")
+        
     daily_counts = aggregate_daily_data(bookings_curr)
     daily_details = aggregate_daily_details(bookings_curr)
 
-    if not daily_counts:
+    if not daily_counts and not show_full_year:
         st.info("📭 No events scheduled for this year yet.")
         return
 
     try:
         import calendar as cal
-
         max_count = max(daily_counts.values()) if daily_counts.values() else 1
 
-        # Determine months
+        # Pagination Controls (only if not full year)
+        months_to_render = []
         if show_full_year:
-            months_to_render = list(range(1, 13))
+             months_to_render = list(range(1, 13))
         else:
-            months_with_data = set(b.get("month") for b in bookings_curr if b.get("month"))
+            # Determine range based on offset
+            # Default to showing current month + next 2
+            if "cal_offset" not in st.session_state:
+                 st.session_state["cal_offset"] = 0
+            
+            # Calculate 3-month window
+            # Base month = Current Month + Offset
             now = datetime.now()
-            if selected_year == now.year:
-                months_with_data.add(now.month)
-                if now.month < 12:
-                    months_with_data.add(now.month + 1)
-            months_to_render = sorted(months_with_data) if months_with_data else [1]
+            start_month_idx = (now.month - 1) + (st.session_state["cal_offset"] * 3)
+            
+            # Clamp or wrap? Let's clamp to year boundaries for simplicity, or just slide 1-12
+            # Actually user wants "previous/next" 3 months.
+            # Let's map 0 -> Jan-Mar, 1 -> Apr-Jun, etc if we align to quarters?
+            # Or just relative to "Now"?
+            # Let's align to fixed quarters/trimesters for stability: 1-3, 4-6, 7-9, 10-12
+            # Or simplified: Start at Current Month, paging moves by 3.
+            
+            # Let's stick to user request: "view per 3 bulan aja"
+            # We'll use a 3-month sliding window.
+            # Initial view: Current Month, +1, +2.
+            
+            # But what if we want to see Jan 2026 when it's Dec 2025?
+            # The dashboard is year-specific (selected_year).
+            # So we should just page through 1..12 of the selected_year.
+            
+            # Page 0: 1-3 (Jan-Mar)
+            # Page 1: 4-6 (Apr-Jun)
+            # Page 2: 7-9 (Jul-Sep)
+            # Page 3: 10-12 (Oct-Dec)
+            
+            # Auto-select page based on current month if selected_year == current
+            if "cal_page" not in st.session_state:
+                if selected_year == now.year:
+                    st.session_state["cal_page"] = (now.month - 1) // 3
+                else:
+                    st.session_state["cal_page"] = 0 # Start at Jan for other years
+            
+            # Controls - More spaced out for symmetry
+            nav1, nav2, nav3 = st.columns([1, 6, 1], vertical_alignment="center")
+            
+            # Clamp page index to ensure it's always valid (0-3) even if UI lags/double-clicks
+            if st.session_state["cal_page"] < 0: st.session_state["cal_page"] = 0
+            if st.session_state["cal_page"] > 3: st.session_state["cal_page"] = 3
+            
+            # Check button states
+            can_prev = st.session_state["cal_page"] > 0
+            can_next = st.session_state["cal_page"] < 3
+
+            with nav1:
+                if st.button("⬅️ PREV", key="cal_prev", disabled=not can_prev, use_container_width=True):
+                     if can_prev: # Double check
+                        st.session_state["cal_page"] -= 1
+                        st.rerun()
+            with nav3:
+                if st.button("NEXT ➡️", key="cal_next", disabled=not can_next, use_container_width=True):
+                     if can_next: # Double check
+                        st.session_state["cal_page"] += 1
+                        st.rerun()
+            
+            # Re-clamp after potential update (to be super safe)
+            page = max(0, min(3, st.session_state["cal_page"]))
+            st.session_state["cal_page"] = page
+            
+            start_m = (page * 3) + 1
+            # Ensure start_m is valid (1..10)
+            if start_m > 10: start_m = 10 
+            if start_m < 1: start_m = 1
+            
+            end_m = min(12, start_m + 2)
+            months_to_render = list(range(start_m, end_m + 1))
+            
+            with nav2:
+                 # Safe date creation
+                 try:
+                    d1 = date(2000, start_m, 1).strftime('%B')
+                    d2 = date(2000, end_m, 1).strftime('%B')
+                 except ValueError:
+                    d1, d2 = "Err", "Err"
+                 
+                 st.markdown(f"<div style='text-align:center; color:#64748b; font-size:0.9rem; font-weight:600; padding-top:5px;'> {d1} - {d2} </div>", unsafe_allow_html=True)
 
         # Build ONE self-contained HTML with all months + CSS
         month_htmls = []
@@ -332,13 +409,19 @@ def render_event_calendar(bookings_curr: List[Dict], selected_year: int) -> None
             month_htmls.append(mh)
 
         # Compute grid columns
-        n_cols = min(4, len(months_to_render))
+        # Redesign: Always use 3 columns max to fit in the [3, 1] layout better
+        # Full Year: 3 cols x 4 rows
+        # 3 Month: 3 cols x 1 row
+        n_cols = 3 
+        
+        # Adjust layout for 3-month view (1 row of 3) vs Full Year (rows of 3)
+        wrapper_style = "grid-template-columns:repeat(3,1fr);"
 
         full_html = f"""<!DOCTYPE html>
 <html><head><style>
 *{{margin:0;padding:0;box-sizing:border-box;}}
-body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:transparent;padding:8px 0;}}
-.cal-grid{{display:grid;grid-template-columns:repeat({n_cols},1fr);gap:12px;}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:transparent;padding:2px 0 20px 0; overflow-y: hidden;}} /* Minimal Top padding */
+.cal-grid{{display:grid;{wrapper_style}gap:12px;}}
 .month-card{{border:1px solid #e5e7eb;border-radius:8px;padding:12px;background:#fff;}}
 .month-title{{font-weight:600;color:#166534;margin-bottom:8px;font-size:0.85rem;text-align:center;}}
 .day-headers{{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:6px;}}
@@ -347,8 +430,9 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 .day-empty{{aspect-ratio:1;}}
 .cal-day{{aspect-ratio:1;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:600;cursor:pointer;position:relative;transition:transform 0.15s ease;}}
 .cal-day:hover{{transform:scale(1.2);z-index:100;}}
-.tooltip{{visibility:hidden;opacity:0;position:absolute;bottom:130%;left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;padding:8px 12px;border-radius:6px;font-size:11px;white-space:pre-line;min-width:140px;max-width:200px;box-shadow:0 4px 12px rgba(0,0,0,0.2);z-index:1000;transition:opacity 0.2s;pointer-events:none;}}
-.tooltip::after{{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#1f2937;}}
+/* Tooltip BELOW the cell to fix top clipping without huge gap */
+.tooltip{{visibility:hidden;opacity:0;position:absolute;top:130%;left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;padding:8px 12px;border-radius:6px;font-size:11px;white-space:pre-line;min-width:140px;max-width:200px;box-shadow:0 4px 12px rgba(0,0,0,0.2);z-index:1000;transition:opacity 0.2s;pointer-events:none;}}
+.tooltip::after{{content:'';position:absolute;bottom:100%;left:50%;transform:translateX(-50%);border:6px solid transparent;border-bottom-color:#1f2937;}}
 .cal-day:hover .tooltip{{visibility:visible;opacity:1;}}
 .legend{{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:0.75rem;color:#6b7280;justify-content:center;}}
 .legend-box{{width:18px;height:18px;border-radius:4px;}}
@@ -365,9 +449,15 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 </div>
 </body></html>"""
 
-        # Calculate height: ~220px per row of months + 40px legend
-        n_rows = (len(months_to_render) + n_cols - 1) // n_cols
-        iframe_height = n_rows * 230 + 50
+        # Calculate height: 
+        # Rows + Bottom Buffer for Tooltip
+        # Full year: ~4 rows * 320px (since 3 cols)
+        # 3 months: 1 row
+        if show_full_year:
+            n_rows = (len(months_to_render) + n_cols - 1) // n_cols
+            iframe_height = n_rows * 320 + 150 # Buffer
+        else:
+            iframe_height = 500 # Fixed generous
 
         components.html(full_html, height=iframe_height, scrolling=False)
 
@@ -380,48 +470,51 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 # =============================================================================
 
 def render_quick_jump(bookings_curr: List[Dict]) -> None:
-    """Render the quick event navigator with edit functionality."""
+    """Render the quick event navigator (Vertical Layout for Sidebar)."""
     if not bookings_curr:
         return
 
-    st.markdown("<div style='margin-top: 24px;'></div>", unsafe_allow_html=True)
+    # No margin-top needed if it's in a sidebar column alignment
+    # st.markdown("<div style='margin-top: 24px;'></div>", unsafe_allow_html=True)
+    
+    # Styled Header for Sidebar
+    st.markdown("### ⚡ Quick Actions")
 
+    # Vertical Stack
     with st.container(border=True):
-        st.caption("🚀 **Quick Jump to Event**")
+        # 1. Monthly Filter
+        months_in_data = sorted({b.get("month") for b in bookings_curr if b.get("month")})
+        if not months_in_data:
+            st.info("No month data available.")
+            return
 
-        c_month, c_evt, c_btn = st.columns([1, 2.5, 1], vertical_alignment="bottom")
+        month_options = [date(2000, m, 1).strftime("%B") for m in months_in_data]
+        selected_month_name = st.selectbox("Filter Month", options=month_options,
+            index=0, key="qj_month_filter")
 
-        with c_month:
-            months_in_data = sorted({b.get("month") for b in bookings_curr if b.get("month")})
-            if not months_in_data:
-                st.info("No month data available.")
-                return
+        # 2. Event Selection
+        month_num = datetime.strptime(selected_month_name, "%B").month
+        filtered = [b for b in bookings_curr if b["month"] == month_num]
+        sorted_evts = sorted(filtered, key=lambda x: x["date_str"])
 
-            month_options = [date(2000, m, 1).strftime("%B") for m in months_in_data]
-            selected_month_name = st.selectbox("Filter Month", options=month_options,
-                index=0, key="qj_month_filter", label_visibility="collapsed")
+        if not sorted_evts:
+            st.info("No events in this month.")
+            selected_evt_id = None
+        else:
+            selected_evt_id = st.selectbox("Select Event",
+                options=[b["id"] for b in sorted_evts],
+                format_func=lambda x: next(
+                    (f"📅 {b['date_str']} | {b['client_name']}" for b in sorted_evts if b["id"] == x),
+                    "Unknown"
+                ),
+                key="quick_nav_evt")
 
-        with c_evt:
-            month_num = datetime.strptime(selected_month_name, "%B").month
-            filtered = [b for b in bookings_curr if b["month"] == month_num]
-            sorted_evts = sorted(filtered, key=lambda x: x["date_str"])
+        st.markdown("") # Spacer
 
-            if not sorted_evts:
-                st.info("No events in this month.")
-                selected_evt_id = None
-            else:
-                selected_evt_id = st.selectbox("Select Event",
-                    options=[b["id"] for b in sorted_evts],
-                    format_func=lambda x: next(
-                        (f"📅 {b['date_str']} | {b['client_name']} @ {b['venue']}" for b in sorted_evts if b["id"] == x),
-                        "Unknown"
-                    ),
-                    key="quick_nav_evt", label_visibility="collapsed")
-
-        with c_btn:
-            if st.button("✏️ Edit Invoice", use_container_width=True, type="primary"):
-                if selected_evt_id:
-                    _handle_quick_edit(selected_evt_id)
+        # 3. Action Button
+        if st.button("✏️ Edit Invoice", use_container_width=True, type="primary"):
+            if selected_evt_id:
+                _handle_quick_edit(selected_evt_id)
 
 
 def _handle_quick_edit(invoice_id: int) -> None:
