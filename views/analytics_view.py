@@ -77,8 +77,11 @@ def render_page() -> None:
     # 8. Revenue Chart
     render_revenue_chart(bookings, selected_year, current_target, kpi["mo_rev"])
 
-    # 9. Event Calendar
-    render_event_calendar(kpi["bookings_curr"], selected_year)
+    # 9. Layout: Calendar (Left, 3/4) + Quick Actions (Right, 1/4)
+    c_cal, c_actions = st.columns([3, 1])
+    
+    with c_cal:
+        render_event_calendar(kpi["bookings_curr"], selected_year)
 
-    # 10. Quick Jump Navigator
-    render_quick_jump(kpi["bookings_curr"])
+    with c_actions:
+        render_quick_jump(kpi["bookings_curr"])
