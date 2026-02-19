@@ -267,7 +267,9 @@ class SQLiteAdapter(DatabaseAdapter):
                    LENGTH(invoice_data) as data_size,
                    json_extract(invoice_data, '$.meta.client_phone') as client_phone,
                    json_extract(invoice_data, '$.meta.wedding_date') as wedding_date,
-                   json_extract(invoice_data, '$.meta.payment_terms') as payment_terms
+                   json_extract(invoice_data, '$.meta.payment_terms') as payment_terms,
+                   json_extract(invoice_data, '$.meta.venue') as venue,
+                   json_extract(invoice_data, '$.meta.title') as title
             FROM invoices ORDER BY id DESC LIMIT ?
         """
         try:
@@ -286,7 +288,9 @@ class SQLiteAdapter(DatabaseAdapter):
                    LENGTH(invoice_data) as data_size,
                    json_extract(invoice_data, '$.meta.client_phone') as client_phone,
                    json_extract(invoice_data, '$.meta.wedding_date') as wedding_date,
-                   json_extract(invoice_data, '$.meta.payment_terms') as payment_terms
+                   json_extract(invoice_data, '$.meta.payment_terms') as payment_terms,
+                   json_extract(invoice_data, '$.meta.venue') as venue,
+                   json_extract(invoice_data, '$.meta.title') as title
             FROM invoices 
             WHERE invoice_no LIKE ? OR client_name LIKE ?
             ORDER BY id DESC LIMIT ?
@@ -486,7 +490,7 @@ class SQLiteAdapter(DatabaseAdapter):
                     # Parse Date
                     dt = None
                     if w_date_str:
-                        for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                        for fmt in ("%A, %d %B %Y", "%d %B %Y", "%B %Y", "%Y-%m-%d", "%d-%m-%Y"):
                             try:
                                 dt = datetime.strptime(w_date_str, fmt)
                                 break
@@ -540,7 +544,7 @@ class SQLiteAdapter(DatabaseAdapter):
                     # Parse Date
                     dt = None
                     if w_date_str:
-                        for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                        for fmt in ("%A, %d %B %Y", "%d %B %Y", "%B %Y", "%Y-%m-%d", "%d-%m-%Y"):
                             try:
                                 dt = datetime.strptime(w_date_str, fmt)
                                 break
@@ -741,7 +745,9 @@ class PostgresAdapter(DatabaseAdapter):
                    LENGTH(invoice_data) as data_size,
                    invoice_data::json->'meta'->>'client_phone' as client_phone,
                    invoice_data::json->'meta'->>'wedding_date' as wedding_date,
-                   invoice_data::json->'meta'->'payment_terms' as payment_terms
+                   invoice_data::json->'meta'->'payment_terms' as payment_terms,
+                   invoice_data::json->'meta'->>'venue' as venue,
+                   invoice_data::json->'meta'->>'title' as title
             FROM invoices ORDER BY id DESC LIMIT %s
         """
         try:
@@ -759,7 +765,9 @@ class PostgresAdapter(DatabaseAdapter):
                    LENGTH(invoice_data) as data_size,
                    invoice_data::json->'meta'->>'client_phone' as client_phone,
                    invoice_data::json->'meta'->>'wedding_date' as wedding_date,
-                   invoice_data::json->'meta'->'payment_terms' as payment_terms
+                   invoice_data::json->'meta'->'payment_terms' as payment_terms,
+                   invoice_data::json->'meta'->>'venue' as venue,
+                   invoice_data::json->'meta'->>'title' as title
             FROM invoices 
             WHERE invoice_no ILIKE %s OR client_name ILIKE %s
             ORDER BY id DESC LIMIT %s
@@ -872,6 +880,16 @@ class PostgresAdapter(DatabaseAdapter):
                 conn.commit()
         except Exception as e:
             print(f"[DB] Postgres delete_package failed: {e}")
+
+    def toggle_package_status(self, package_id: int, is_active: bool) -> None:
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as c:
+                    val = 1 if is_active else 0
+                    c.execute("UPDATE packages SET is_active = %s WHERE id = %s", (val, package_id))
+                conn.commit()
+        except Exception as e:
+            print(f"[DB] Postgres toggle_package_status failed: {e}")
 
     def delete_all_packages(self) -> None:
         try:
@@ -1041,7 +1059,7 @@ class PostgresAdapter(DatabaseAdapter):
                     
                     dt = None
                     if w_date_str:
-                         for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                         for fmt in ("%A, %d %B %Y", "%d %B %Y", "%B %Y", "%Y-%m-%d", "%d-%m-%Y"):
                             try:
                                 dt = datetime.strptime(w_date_str, fmt)
                                 break
@@ -1097,7 +1115,7 @@ class PostgresAdapter(DatabaseAdapter):
                     
                     dt = None
                     if w_date_str:
-                         for fmt in ("%A, %d %B %Y", "%Y-%m-%d", "%d %B %Y", "%d-%m-%Y"):
+                         for fmt in ("%A, %d %B %Y", "%d %B %Y", "%B %Y", "%Y-%m-%d", "%d-%m-%Y"):
                             try:
                                 dt = datetime.strptime(w_date_str, fmt)
                                 break
@@ -1173,9 +1191,18 @@ def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
 def set_config(key: str, value: str) -> None:
     current_db.set_config(key, value)
 
+def _refresh_calendar():
+    """Silently regenerate the static subscription calendar."""
+    try:
+        from modules.ics_generator import regenerate_static_calendar
+        regenerate_static_calendar()
+    except Exception:
+        pass
+
 def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
     current_db.save_invoice(invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob)
     bump_analytics_version()
+    _refresh_calendar()
 
 def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
     return current_db.get_invoices(limit)
@@ -1186,10 +1213,12 @@ def get_invoice_details(invoice_id: int) -> Optional[Dict[str, Any]]:
 def update_invoice(invoice_id: int, invoice_no: str, client_name: str, date_str: str, total_amount: float, invoice_data_json: str, pdf_blob: bytes = None) -> None:
     current_db.update_invoice(invoice_id, invoice_no, client_name, date_str, total_amount, invoice_data_json, pdf_blob)
     bump_analytics_version()
+    _refresh_calendar()
 
 def delete_invoice(invoice_id: int) -> None:
     current_db.delete_invoice(invoice_id)
     bump_analytics_version()
+    _refresh_calendar()
 
 def get_dashboard_stats() -> Dict[str, Any]:
     return current_db.get_dashboard_stats()
