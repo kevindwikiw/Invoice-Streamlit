@@ -8,7 +8,15 @@ from views.styles import inject_styles
 # =========================================================
 # 0) CONSTANTS
 # =========================================================
-CATEGORIES = ["Utama", "Bonus"]
+CATEGORIES = [
+  "Wedding",
+  "Bundling Package",
+  "Prewedding",
+  "Engagement/Sangjit",
+  "Corporate/Event",
+  "Add-ons",
+  "Free / Complimentary"
+]
 CATEGORY_ALL = "All"
 
 # Format Sort: (key_dictionary, is_ascending)
@@ -100,8 +108,70 @@ def _apply_sort(data: list, sort_label: str) -> list:
 
 
 # =========================================================
-# 2) FORM
+# 2) FORM HELPERS & COMPONENT
 # =========================================================
+
+def _parse_bundle_description(desc: str) -> list[dict]:
+    """
+    Parses a description string into list of items if it follows the bundle format.
+    Format:
+    **Title**
+    Lines...
+    
+    **Title 2**
+    Lines...
+    """
+    import re
+    if not desc:
+        return [{"title": "", "details": ""}, {"title": "", "details": ""}]
+
+    # Regex to find **Title** followed by content until next **Title** or end
+    # Note: This is a simple parser.
+    parts = re.split(r'\n\s*\n', desc.strip())
+    
+    items = []
+    current_item = {"title": "", "details": ""}
+    
+    # Heuristic: Check if parts look like bundle items
+    # If not bundle format, return single item with full desc
+    is_bundle_format = any(p.strip().startswith("**") and "**" in p.strip()[2:] for p in parts)
+    
+    if not is_bundle_format and "**" not in desc:
+         return [{"title": "Package Details", "details": desc}]
+
+    # Robust parsing
+    raw_sections = re.split(r'(?:\n|^)\*\*([^*]+)\*\*(?:\n|$)', desc)
+    # Result: [pre_text, title1, body1, title2, body2, ...]
+    
+    if len(raw_sections) < 3:
+         # Fallback
+         return [{"title": "Package Details", "details": desc}]
+         
+    # Skip index 0 (pre_text usually empty)
+    for i in range(1, len(raw_sections), 2):
+        t = raw_sections[i].strip()
+        d = raw_sections[i+1].strip() if i+1 < len(raw_sections) else ""
+        items.append({"title": t, "details": d})
+        
+    while len(items) < 2:
+        items.append({"title": "", "details": ""})
+        
+    return items
+
+def _generate_bundle_description(items: list[dict]) -> str:
+    """Combines items into formatted Markdown string."""
+    chunks = []
+    for it in items:
+        t = it.get("title", "").strip()
+        d = it.get("details", "").strip()
+        if t or d:
+            if t:
+                chunks.append(f"**{t}**\n{d}")
+            else:
+                chunks.append(d)
+    return "\n\n".join(chunks)
+
+
 def _render_package_form(data: dict | None = None, key_prefix: str = "pkg"):
     is_edit = data is not None
     defaults = {
@@ -121,13 +191,14 @@ def _render_package_form(data: dict | None = None, key_prefix: str = "pkg"):
 
         c1, c2 = st.columns([1, 1])
         with c1:
-            # Handle index error safety
             try:
                 cat_idx = CATEGORIES.index(defaults["cat"])
             except ValueError:
                 cat_idx = 0
-                
+            
+            # Auto-detect category change for UI toggle
             category = st.selectbox("Category", CATEGORIES, index=cat_idx, key=f"{key_prefix}_cat")
+            
         with c2:
             price = st.number_input(
                 "Price (IDR)",
@@ -141,17 +212,94 @@ def _render_package_form(data: dict | None = None, key_prefix: str = "pkg"):
 
         st.write("")
         st.markdown("**🧾 Package Details / Items**")
-        st.caption("Tulis satu item per baris. Tekan ENTER untuk baris baru.")
-        st.info("💡 **Tips Deskripsi**: Tulis poin penting di 3 baris pertama (misal: Durasi, Output, Benefit) agar rapi di tampilan kartu.")
+        
+        # --- BUNDLE BUILDER UI LOGIC ---
+        is_bundle_cat = (category == "Bundling Package")
+        
+        # State key for toggling modes (if user wants raw edit even in bundle cat)
+        k_mode = f"{key_prefix}_mode"
+        if k_mode not in st.session_state:
+            st.session_state[k_mode] = "builder" if is_bundle_cat else "raw"
+            
+        # If Category changed to/from Bundle, auto-switch mode ONLY if not manually set recently?
+        # Simpler: If Category is Bundle, default to builder. User can switch to raw.
+        
+        if is_bundle_cat:
+            b_uv, b_parse = st.columns([0.7, 0.3], vertical_alignment="bottom")
+            with b_uv:
+                 st.info("💡 **Bundle Mode Active**: Add multiple sub-packages below.")
+            with b_parse:
+                # Toggle
+                current_mode = st.session_state[k_mode]
+                if current_mode == "builder":
+                    if st.button("📝 Switch to Raw Text", key=f"{key_prefix}_to_raw", use_container_width=True):
+                        st.session_state[k_mode] = "raw"
+                        st.rerun()
+                else:
+                    if st.button("🧩 Switch to Builder", key=f"{key_prefix}_to_builder", use_container_width=True):
+                        st.session_state[k_mode] = "builder"
+                        st.rerun()
+        
+        final_description = defaults["desc"]
+        
+        # RENDER BUILDER
+        if is_bundle_cat and st.session_state[k_mode] == "builder":
+            # 1. Parse existing desc into Items
+            # We use st.session_state to hold temp builder values to prevent loss on rerun
+            k_items = f"{key_prefix}_b_items"
+            
+            # Initial Load
+            if k_items not in st.session_state:
+                st.session_state[k_items] = _parse_bundle_description(defaults["desc"])
+            
+            items = st.session_state[k_items]
+            
+            # Render Inputs
+            for idx, item in enumerate(items):
+                with st.container():
+                     st.markdown(f"**Item {idx+1}**")
+                     c_t, c_d = st.columns([1, 2])
+                     with c_t:
+                         new_t = st.text_input(f"Title {idx+1}", value=item["title"], key=f"{key_prefix}_b_t_{idx}", placeholder="e.g. Wedding")
+                         items[idx]["title"] = new_t
+                     with c_d:
+                         new_d = st.text_area(f"Details {idx+1}", value=item["details"], height=100, key=f"{key_prefix}_b_d_{idx}", placeholder="- Item 1\n- Item 2")
+                         items[idx]["details"] = new_d
+            
+            # Add / Remove Buttons
+            ba1, ba2 = st.columns([1, 4])
+            with ba1:
+                if st.button("＋ Add Item", key=f"{key_prefix}_add_item"):
+                    items.append({"title": "", "details": ""})
+                    st.rerun()
+            
+            # Generate Description Live
+            final_description = _generate_bundle_description(items)
+            
+            # Preview
+            with st.expander("👀 Live Preview (Result)", expanded=False):
+                st.markdown(final_description)
+                
+        else:
+            # RAW TEXT MODE (Standard)
+            if is_bundle_cat:
+                 st.caption("Mode Manual: Gunakan format **Title** untuk memisahkan paket.")
+                 placeholder_text = "**Wedding**\n- Item 1\n- Item 2\n\n**Prewedding**\n- Item A\n- Item B"
+            else:
+                 st.caption("Tulis satu item per baris. Tekan ENTER untuk baris baru.")
+                 placeholder_text = "1 Photographer\n1 Videographer\nAlbum 20 Pages"
 
-        description = st.text_area(
-            "Description",
-            value=defaults["desc"],
-            height=220,
-            label_visibility="collapsed",
-            placeholder="1 Photographer\n1 Videographer\nAlbum 20 Pages",
-            key=f"{key_prefix}_desc",
-        )
+            final_description = st.text_area(
+                "Description",
+                value=defaults["desc"],
+                height=220,
+                label_visibility="collapsed",
+                placeholder=placeholder_text,
+                key=f"{key_prefix}_desc",
+            )
+            # Clean up builder state if checking raw
+            if f"{key_prefix}_b_items" in st.session_state:
+                del st.session_state[f"{key_prefix}_b_items"]
 
         st.divider()
 
@@ -166,7 +314,7 @@ def _render_package_form(data: dict | None = None, key_prefix: str = "pkg"):
             "name": name.strip(),
             "category": category,
             "price": float(price),
-            "description": description.strip(),
+            "description": final_description.strip(),
         }
         return is_save, is_close, payload
 
@@ -174,11 +322,12 @@ def _render_package_form(data: dict | None = None, key_prefix: str = "pkg"):
 # =========================================================
 # 3) DIALOGS
 # =========================================================
-@st.dialog("➕ Add New Package")
+@st.dialog("➕ Add New Package", width="large")
 def show_add_dialog():
     is_save, is_close, payload = _render_package_form(data=None, key_prefix="add_new")
 
     if is_close:
+        del st.session_state["_pkg_modal"]
         st.rerun()
 
     if is_save:
@@ -194,15 +343,17 @@ def show_add_dialog():
 
         st.toast("Package created!", icon="✅")
         st.cache_data.clear()
+        del st.session_state["_pkg_modal"]
         st.rerun()
 
 
-@st.dialog("✏️ Edit Package")
+@st.dialog("✏️ Edit Package", width="large")
 def show_edit_dialog(row_data: dict):
     pkg_id = int(row_data["id"])
     is_save, is_close, payload = _render_package_form(row_data, key_prefix=f"edit_{pkg_id}")
 
     if is_close:
+        del st.session_state["_pkg_modal"]
         st.rerun()
 
     if is_save:
@@ -218,6 +369,7 @@ def show_edit_dialog(row_data: dict):
 
         st.toast("Saved!", icon="💾")
         st.cache_data.clear()
+        del st.session_state["_pkg_modal"]
         st.rerun()
 
 
@@ -386,7 +538,8 @@ def render_page():
     all_data = _safe_load_data(active_only=False) 
 
     # Modal handling
-    modal = st.session_state.pop("_pkg_modal", None)
+    # modal = st.session_state.pop("_pkg_modal", None) # Default pop causes close on rerun
+    modal = st.session_state.get("_pkg_modal", None)
     if modal:
         mode, pkg_id = modal
         if mode == "add":
@@ -400,6 +553,10 @@ def render_page():
                     show_edit_dialog(row_dict)
                 else:
                     show_delete_dialog(row_dict)
+            else:
+                # ID not found
+                del st.session_state["_pkg_modal"]
+                st.rerun()
 
     st.write("")
 
