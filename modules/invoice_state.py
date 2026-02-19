@@ -109,7 +109,8 @@ def initialize_session_state() -> None:
         "inv_client_name": "",
         "inv_client_phone": "",
         "inv_client_email": "",
-        "inv_wedding_date": date.today() + timedelta(days=90),
+        # Default date as string (e.g. "20 October 2026")
+        "inv_wedding_date": (date.today() + timedelta(days=90)).strftime("%d %B %Y"),
         "inv_venue": "",
 
         # Payment Schedule - Dynamic terms (min 2: DP + Pelunasan)
@@ -138,6 +139,16 @@ def initialize_session_state() -> None:
         if k not in st.session_state:
             st.session_state[k] = v
             
+    # MIGRATION: Ensure inv_wedding_date is STRING (fix for legacy date objects in session)
+    if "inv_wedding_date" in st.session_state:
+        val = st.session_state["inv_wedding_date"]
+        if not isinstance(val, str):
+            # Convert date/datetime/other to string format or empty
+            try:
+                st.session_state["inv_wedding_date"] = val.strftime("%d %B %Y")
+            except:
+                 st.session_state["inv_wedding_date"] = ""
+    
     # Ensure Invoice No Exists (Force Generation if empty)
     ensure_invoice_no_exists()
     # Double check emptiness (e.g. if key existed but was "")
