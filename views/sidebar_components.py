@@ -5,7 +5,15 @@ from controllers.invoice_callbacks import cb_add_item_to_cart, cb_delete_item_by
 from views.styles import POS_COLUMN_RATIOS
 from views.invoice_components import render_package_card
 
-CATEGORIES = ["Utama", "Bonus"]
+CATEGORIES = [
+  "Wedding",
+  "Bundling Package",
+  "Prewedding",
+  "Engagement/Sangjit",
+  "Corporate/Event",
+  "Add-ons",
+  "Free / Complimentary"
+]
 
 def render_sidebar_packages_v2(packages: List[Dict[str, Any]]) -> None:
     """Refactored Sidebar: Cleaner, Modular, Limit 5."""
@@ -48,8 +56,17 @@ def render_sidebar_packages_v2(packages: List[Dict[str, Any]]) -> None:
         items = grouped[category]
         if not items: continue
         
-        # Limit Logic: Show 6 items per page for all categories (Cleaner UI)
-        limit = 6
+        # Limit Logic: Tailored per category
+        limit_map = {
+            "Wedding": 2,
+            "Engagement/Sangjit": 1,
+            "Bundling Package": 2,
+            "Prewedding": 1,
+            "Corporate/Event": 1,
+            "Add-ons": 1,
+            "Free / Complimentary": 1
+        }
+        limit = limit_map.get(category, 4) # Default 4 for others (Add-ons, Free)
         
         # Pagination
         page_key = f"pge_{category}"
@@ -70,12 +87,34 @@ def render_sidebar_packages_v2(packages: List[Dict[str, Any]]) -> None:
 
         # Header (Category + Count)
         count_display = f"{len(display_items)}/{len(items)}"
+        
+        # Color Map for Categories
+        # Color Map for Categories (Synced with views/styles.py .pkg-pill)
+        cat_colors = {
+            "Wedding": "#fce7f3",             # Pink
+            "Bundling Package": "#e0e7ff",    # Indigo
+            "Prewedding": "#e0f2fe",          # Sky
+            "Engagement/Sangjit": "#ccfbf1",  # Teal
+            "Corporate/Event": "#f1f5f9",     # Slate
+            "Add-ons": "#fff7ed",             # Orange
+            "Free / Complimentary": "#dcfce7" # Green
+        }
+        bg_color = cat_colors.get(category, "#f8fafc")
+        
+        # Style: Simpler, closer to Streamlit native
         st.markdown(f'''
-            <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-top:12px;">
-                <div class="sidebar-category" style="margin:0; border:none;">{category}</div>
-                <div style="font-size:0.7rem; color:#9ca3af;">{count_display}</div>
+            <div style="
+                display:flex; justify-content:space-between; align-items:center; 
+                margin-top:16px; margin-bottom:8px;
+                background:{bg_color}; padding:6px 12px; border-radius:6px;
+            ">
+                <div style="font-weight:600; font-size:14px; color:#31333F;">
+                    {category}
+                </div>
+                <div style="font-size:12px; color:#64748b; background:rgba(255,255,255,0.6); padding:2px 8px; border-radius:4px;">
+                    {count_display}
+                </div>
             </div>
-            <hr style="margin:4px 0 8px 0; border-top:1px solid #eee;">
         ''', unsafe_allow_html=True)
 
         # 1-Column List Layout
@@ -213,10 +252,37 @@ def render_full_catalog_content(packages: List[Dict[str, Any]]):
         st.info("No packages found.")
         return
     
+    # Color Map (Synced)
+    cat_colors = {
+        "Wedding": "#fce7f3",             # Pink
+        "Bundling Package": "#e0e7ff",    # Indigo
+        "Prewedding": "#e0f2fe",          # Sky
+        "Engagement/Sangjit": "#ccfbf1",  # Teal
+        "Corporate/Event": "#f1f5f9",     # Slate
+        "Add-ons": "#fff7ed",             # Orange
+        "Free / Complimentary": "#dcfce7" # Green
+    }
+
     # Render
     for cat, items in grouped.items():
         if not items: continue
-        st.markdown(f"#### {cat} ({len(items)})")
+        
+        bg_color = cat_colors.get(cat, "#f8fafc")
+        
+        st.markdown(f'''
+            <div style="
+                display:flex; justify-content:space-between; align-items:center; 
+                margin-top:24px; margin-bottom:12px;
+                background:{bg_color}; padding:8px 16px; border-radius:8px;
+            ">
+                <div style="font-weight:700; font-size:16px; color:#31333F;">
+                    {cat}
+                </div>
+                <div style="font-size:13px; color:#64748b; background:rgba(255,255,255,0.6); padding:2px 10px; border-radius:6px; font-weight:600;">
+                    {len(items)} Items
+                </div>
+            </div>
+        ''', unsafe_allow_html=True)
         
         for i in range(0, len(items), 3):
             cols = st.columns(3)
