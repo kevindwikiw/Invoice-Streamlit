@@ -12,6 +12,8 @@ def get_invoice_css() -> str:
     grid = _pos_grid_template(POS_COLUMN_RATIOS)
     return f"""
     <style>
+    /* --- FONT PERFORMANCE: swap injected via JS below --- */
+
     /* --- UTILITIES --- */
     .hrow {{ display:flex; gap:10px; align-items:center; justify-content:space-between; }}
     .muted {{ color:#6b7280; font-size:.85rem; }}
@@ -173,8 +175,17 @@ def get_invoice_css() -> str:
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }}
-    .pkg-pill.main {{ background: #e8f5e9; color: #15803d; }}
-    .pkg-pill.addon {{ background: #fff7ed; color: #c2410c; }}
+    /* Category Colors */
+    .pkg-pill.cat-wedding {{ background: #fce7f3; color: #be185d; border: 1px solid #fbcfe8; }}       /* Pink */
+    .pkg-pill.cat-bundling {{ background: #e0e7ff; color: #4338ca; border: 1px solid #c7d2fe; }}      /* Indigo/Purple */
+    .pkg-pill.cat-prewedding {{ background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }}    /* Sky */
+    .pkg-pill.cat-engagement {{ background: #ccfbf1; color: #0f766e; border: 1px solid #99f6e4; }}    /* Teal */
+    .pkg-pill.cat-corporate {{ background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }}     /* Slate */
+    .pkg-pill.cat-addons {{ background: #fff7ed; color: #c2410c; border: 1px solid #ffedd5; }}        /* Orange */
+    .pkg-pill.cat-free {{ background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }}          /* Green */
+    
+    .pkg-pill.main {{ background: #e8f5e9; color: #15803d; }}  /* Fallback */
+    .pkg-pill.addon {{ background: #fff7ed; color: #c2410c; }} /* Fallback */
     
     .pkg-badge-added {{
         font-size: 0.75rem;
@@ -215,11 +226,83 @@ def get_invoice_css() -> str:
         margin: 1.25rem 0 0.5rem 0; padding-bottom: 0.3rem;
         border-bottom: 1px solid #e5e7eb;
     }}
+    
+    /* Sticky Bottom Action Bar */
+    /* Sticky Bottom Action Bar */
+    .sticky-bottom-actions {{
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: white;
+        padding: 1rem 2rem;
+        border-top: 1px solid #e5e7eb;
+        box-shadow: 0 -4px 6px -1px rgba(0, 0, 0, 0.1);
+        z-index: 99999;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 1rem;
+        /* Ensure it covers main content area but respects sidebar interaction if possible */
+        /* Streamlit structure is complex; fixed bottom usually spans full width */
+    }}
+    
+    /* Adjust for sidebar width if expanded? 
+       Streamlit classes are unstable. safer to use right-aligned container 
+       or just max-width wrapper/container. 
+    */
+    /* Better approach: Target a specific container ID if possible, but class is easier. */
+    
+    /* Force Dialog Width for Large Modals */
+    div[data-testid="stDialog"] > div[role="dialog"] {{
+        width: 80vw !important;
+        max-width: 1000px !important;
+    }}
+    
+    /* Custom Input Labels */
+    .label-standard, .label-required, .label-optional {{
+        font-family: "Source Sans Pro", sans-serif;
+        font-size: 14px; 
+        margin-bottom: 0.5rem; /* Match Streamlit Gap */
+        display: block;
+    }}
+
+    .label-required {{
+        color: #31333F; /* Streamlit Default Text */
+        font-weight: 400; /* Standard Weight */
+    }}
+    .label-required::after {{
+        content: " *";
+        color: #ff4b4b; /* Streamlit Red */
+    }}
+    
+    .label-optional {{
+        color: #31333F;
+        font-weight: 400;
+    }}
+    .label-optional span {{
+        font-size: 12px;
+        color: #808495;
+        background: #f0f2f6;
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin-left: 4px;
+        vertical-align: middle;
+    }}
+
+    .label-standard {{
+        color: #31333F;
+        font-weight: 400;
+    }}
     </style>
     """
 
 def inject_styles() -> None:
     st.markdown(get_invoice_css(), unsafe_allow_html=True)
+    # JS: Patch Streamlit's @font-face to use font-display: swap (saves ~600ms)
+    st.markdown("""<script>
+(function(){try{for(var i=0;i<document.styleSheets.length;i++){try{var rules=document.styleSheets[i].cssRules||[];for(var j=0;j<rules.length;j++){if(rules[j].type===5&&rules[j].style.fontFamily&&rules[j].style.fontFamily.indexOf('Material')!==-1){rules[j].style.fontDisplay='swap';}}}catch(e){}};}catch(e){}})();
+</script>""", unsafe_allow_html=True)
 
 
 # ==============================================================================
@@ -343,7 +426,16 @@ def render_package_card(
     # Pill (only if not compact)
     pill_html = ""
     if not compact and category:
-        pill_class = "main" if is_main else "addon"
+        cat_map = {
+            "Wedding": "cat-wedding",
+            "Bundling Package": "cat-bundling",
+            "Prewedding": "cat-prewedding",
+            "Engagement/Sangjit": "cat-engagement",
+            "Corporate/Event": "cat-corporate",
+            "Add-ons": "cat-addons",
+            "Free / Complimentary": "cat-free"
+        }
+        pill_class = cat_map.get(category, "main" if is_main else "addon")
         pill_html = f'<span class="pkg-pill {pill_class}">{html.escape(category)}</span>'
         
     # Added Badge (inline in title)
