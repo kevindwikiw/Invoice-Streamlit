@@ -8,6 +8,9 @@ primary_region = 'sin'
 
 [build]
 
+[server]
+enableStaticServing = true
+
 [http_service]
   internal_port = 8501
   force_https = true
