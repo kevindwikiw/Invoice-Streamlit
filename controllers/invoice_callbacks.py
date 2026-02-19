@@ -149,6 +149,7 @@ def cb_add_item_to_cart(package: Dict[str, Any]) -> None:
             "Price": price,
             "Qty": 1,
             "Total": price,
+            "category": str(package.get("category", "")),
         }
 
         st.session_state["inv_items"].append(new_item)
@@ -313,6 +314,8 @@ def cb_reset_transaction() -> None:
     st.session_state.pop("inv_client_phone", None)
     st.session_state.pop("inv_client_email", None)
     st.session_state.pop("inv_venue", None)
+    st.session_state.pop("inv_hours", None)
+    st.session_state.pop("inv_notes", None)
     st.session_state.pop("inv_wedding_date", None)
     st.session_state.pop("inv_no", None)
     st.session_state.pop("_draft_global_seq", None)  # Force re-fetch of next sequence
@@ -407,6 +410,7 @@ def cb_merge_selected_from_ui() -> None:
         "Qty": 1,
         "Total": float(price),
         "_bundle": True,
+        "category": "Bundling Package",
         "_bundle_src": [dict(x) for x in selected],  # store shallow copies for unmerge
     }
 
@@ -484,6 +488,12 @@ def handle_save_history(inv_no: str, is_update: bool = False) -> None:
         # 0. Sync UI values first! (Critical for callbacks)
         _sync_payment_terms_from_ui()
 
+        # Check if inv_no is empty -> Generate it
+        if not inv_no or not inv_no.strip():
+            inv_no = generate_invoice_no()
+            st.session_state["inv_no"] = inv_no
+            st.toast(f"Generated Invoice No: {inv_no}", icon="🔢")
+
         # 0. Normalize pdf_bytes to raw bytes
         pdf_blob = None
         if pdf_bytes:
@@ -501,8 +511,9 @@ def handle_save_history(inv_no: str, is_update: bool = False) -> None:
             "client_name": st.session_state.get("inv_client_name", ""),
             "client_phone": st.session_state.get("inv_client_phone", ""),
             "client_email": client_email,
-            "wedding_date": (st.session_state.get("inv_wedding_date") or date.today()).strftime("%d %B %Y"),
+            "wedding_date": st.session_state.get("inv_wedding_date", ""),
             "venue": st.session_state.get("inv_venue", ""),
+            "hours": st.session_state.get("inv_hours", ""),
             "subtotal": 0,
             "cashback": safe_float(st.session_state.get("inv_cashback", 0)),
             "payment_terms": st.session_state.get("payment_terms", []),
@@ -511,15 +522,13 @@ def handle_save_history(inv_no: str, is_update: bool = False) -> None:
             "bank_acc": st.session_state.get("bank_ac", ""),
             "bank_holder": st.session_state.get("bank_an", ""),
             "payment_proof": st.session_state.get("pp_cached") or [],
-            "footer_info": [x.strip() for x in str(st.session_state.get("inv_footer", "")).split("\n") if x.strip()]
+            "footer_info": [x.strip() for x in str(st.session_state.get("inv_footer", "")).split("\n") if x.strip()],
+            "wa_template": st.session_state.get("wa_template", ""), # ADDED: Save custom WA template
+            "notes": st.session_state.get("inv_notes", "")
         }
 
-        # Format Wedding date to English for DB meta (consistent with generation)
-        w_date = st.session_state.get("inv_wedding_date")
-        if w_date:
-            meta["wedding_date"] = w_date.strftime("%A, %d %B %Y")
-        else:
-            meta["wedding_date"] = ""
+        # Date is already string now, no formatting needed
+        # w_date = st.session_state.get("inv_wedding_date")
         
         # Recalc Totals for DB
         items = st.session_state.get("inv_items", [])
@@ -592,25 +601,23 @@ def action_generate_pdf(subtotal: float, grand_total: float) -> None:
             "title": st.session_state.get("inv_title", "Invoice"),
             "date": datetime.now().strftime("%d %B %Y"),
             "client_name": st.session_state.get("inv_client_name", ""),
-            "wedding_date": (st.session_state.get("inv_wedding_date") or date.today()).strftime("%d %B %Y"),
+            "wedding_date": st.session_state.get("inv_wedding_date", ""),
             "venue": st.session_state.get("inv_venue", ""),
+            "hours": st.session_state.get("inv_hours", ""),
             "subtotal": subtotal,
             "cashback": st.session_state.get("inv_cashback", 0),
             "payment_terms": st.session_state.get("payment_terms", []),
             "terms": st.session_state.get("inv_terms", ""),
             "bank_name": st.session_state.get("bank_nm", ""),
+            "notes": st.session_state.get("inv_notes", ""),
             "bank_acc": st.session_state.get("bank_ac", ""),
             "bank_holder": st.session_state.get("bank_an", ""),
             "payment_proof": st.session_state.get("pp_cached") or [],
             "footer_info": [x.strip() for x in str(st.session_state.get("inv_footer", "")).split("\n") if x.strip()]
         }
         
-        # Format Wedding date to English: "Sunday, 12 January 2026"
-        w_date = st.session_state.get("inv_wedding_date")
-        if w_date:
-            meta["wedding_date"] = w_date.strftime("%A, %d %B %Y")
-        else:
-            meta["wedding_date"] = ""
+        # Date is already string
+        # w_date = st.session_state.get("inv_wedding_date")
 
         with st.spinner("Generating PDF..."):
             # Lazy Import for Performance (Load bulky PDF libs only when needed)
