@@ -71,7 +71,24 @@ def render_page():
     with f2:
         limit = st.selectbox("Show", [10, 25, 50], index=0, label_visibility="collapsed")
     with f3:
-        st.write("")  # Spacer
+        # Subscription Calendar Download
+        if st.button("📅 Subscribe Calendar", use_container_width=True, help="Download all events as .ics"):
+            try:
+                from modules.ics_generator import generate_subscription_ics
+                all_invs = db.get_invoices(limit=500)
+                events = []
+                for inv in all_invs:
+                    detail = db.get_invoice_details(inv["id"])
+                    if detail:
+                        payload = json.loads(detail["invoice_data"])
+                        events.append({"meta": payload.get("meta", {}), "grand_total": inv.get("total_amount", 0)})
+                ics_data = generate_subscription_ics(events)
+                st.session_state["_sub_ics"] = ics_data
+            except Exception as e:
+                st.error(f"Error: {e}")
+        
+        if "_sub_ics" in st.session_state:
+            st.download_button("⬇️ Download Calendar", data=st.session_state["_sub_ics"], file_name="orbit_events.ics", mime="text/calendar", key="dl_sub_ics", use_container_width=True)
 
     # --- Load Data ---
     if search_q:
@@ -119,47 +136,52 @@ def render_page():
             cnt_unpaid += 1
 
     # --- Stats Bar ---
+    # User Request: "total aja lunas dp dllnya juga disebut lunas aja"
+    # Simplification: Show Total Invoices & Total Expected Revenue.
+    
     st.markdown(
-        f'<div style="display:flex; flex-wrap:wrap; gap:24px; padding:12px 16px; background:#f8fafc; border-radius:8px; margin:16px 0; align-items: center;">'
-        f'    <div style="min-width: 100px;">'
-        f'        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Total Invoices</div>'
-        f'        <div style="font-size:1.25rem; font-weight:800; color:#0f172a;">{len(invoices)}</div>'
+        f'<div style="display:flex; flex-wrap:wrap; gap:16px; padding:16px 20px; background:#f8fafc; border-radius:12px; margin:16px 0; align-items: center; border:1px solid #e2e8f0;">'
+        f'    <div style="min-width: 80px;">'
+        f'        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600; letter-spacing:0.5px;">Total</div>'
+        f'        <div style="font-size:1.3rem; font-weight:800; color:#0f172a;">{len(invoices)}</div>'
         f'    </div>'
+        f'    <div style="width: 1px; height: 36px; background: #cbd5e1;"></div>'
+        f'    <div style="min-width: 60px;">'
+        f'        <div style="font-size:0.75rem; color:#166534; text-transform:uppercase; font-weight:600;">Lunas</div>'
+        f'        <div style="font-size:1.1rem; font-weight:700; color:#16a34a;">{cnt_lunas}</div>'
+        f'    </div>'
+        f'    <div style="min-width: 60px;">'
+        f'        <div style="font-size:0.75rem; color:#075985; text-transform:uppercase; font-weight:600;">DP</div>'
+        f'        <div style="font-size:1.1rem; font-weight:700; color:#0284c7;">{cnt_dp}</div>'
+        f'    </div>'
+        f'    <div style="min-width: 60px;">'
+        f'        <div style="font-size:0.75rem; color:#9a3412; text-transform:uppercase; font-weight:600;">Unpaid</div>'
+        f'        <div style="font-size:1.1rem; font-weight:700; color:#dc2626;">{cnt_unpaid}</div>'
+        f'    </div>'
+        f'    <div style="width: 1px; height: 36px; background: #cbd5e1;"></div>'
         f'    <div style="min-width: 140px;">'
-        f'        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Revenue (Shown)</div>'
-        f'        <div style="font-size:1.25rem; font-weight:800; color:#16a34a;">{rupiah(total_revenue)}</div>'
-        f'    </div>'
-        f'    <div style="width: 1px; height: 32px; background: #e2e8f0;"></div>'
-        f'    <div style="display:flex; gap:16px;">'
-        f'        <div style="text-align:center;">'
-        f'            <div style="font-size:0.75rem; color:#15803d; font-weight:700;">LUNAS</div>'
-        f'            <div style="font-size:1.1rem; font-weight:800; color:#166534;">{cnt_lunas}</div>'
-        f'        </div>'
-        f'        <div style="text-align:center;">'
-        f'            <div style="font-size:0.75rem; color:#0369a1; font-weight:700;">DP / CICIL</div>'
-        f'            <div style="font-size:1.1rem; font-weight:800; color:#075985;">{cnt_dp}</div>'
-        f'        </div>'
-        f'        <div style="text-align:center;">'
-        f'            <div style="font-size:0.75rem; color:#64748b; font-weight:700;">UNPAID</div>'
-        f'            <div style="font-size:1.1rem; font-weight:800; color:#475569;">{cnt_unpaid}</div>'
-        f'        </div>'
+        f'        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600;">Est. Revenue</div>'
+        f'        <div style="font-size:1.3rem; font-weight:800; color:#16a34a;">{rupiah(total_revenue)}</div>'
         f'    </div>'
         f'</div>',
         unsafe_allow_html=True
     )
 
     # --- Invoice Table ---
+    # Column proportions: Invoice(1.8), Status(0.8), Title(1.2), Venue(1.2), Date(1.2), Amount(1.0), Action(0.5)
+    col_ratios = [1.8, 0.8, 1.2, 1.2, 1.2, 1.0, 0.5]
     st.markdown(
-        """
-        <div style="display:grid; grid-template-columns: 1.8fr 1.8fr 1.0fr 1.2fr 1.2fr 0.6fr; gap:8px; padding:10px 12px; 
-                    background:#f1f5f9; border-radius:6px; font-size:0.72rem; font-weight:700; 
+        f"""
+        <div style="display:grid; grid-template-columns: {'fr '.join(str(r) for r in col_ratios)}fr; gap:6px; padding:10px 12px; 
+                    background:#f1f5f9; border-radius:6px; font-size:0.7rem; font-weight:700; 
                     color:#64748b; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;">
             <div>Invoice No</div>
-            <div>Client</div>
             <div style="text-align:center;">Status</div>
+            <div>Event Title</div>
+            <div>Venue</div>
             <div>Event Date</div>
             <div style="text-align:right;">Amount</div>
-            <div style="text-align:center;">Action</div>
+            <div style="text-align:center;">⚙️</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -171,6 +193,8 @@ def render_page():
         client = inv.get("client_name", "Unknown")
         created_str = inv.get("date", "-")
         wedding_str = inv.get("wedding_date") or "-"
+        event_title = inv.get("title") or "-"
+        venue = inv.get("venue") or "-"
         total = inv.get("total_amount", 0)
         has_proof = inv.get("data_size", 0) > 15000
 
@@ -209,25 +233,28 @@ def render_page():
 
         # Row container
         with st.container():
-            c1, c2, c3, c4, c5, c6 = st.columns([1.8, 1.8, 1.0, 1.2, 1.2, 0.6], vertical_alignment="center")
+            c1, c2, c3, c4, c5, c6, c7 = st.columns(col_ratios, vertical_alignment="center")
             
             with c1:
                 proof_icon = " 📎" if has_proof else ""
-                st.markdown(f"<div style='font-weight:700; color:#0f172a;'>{inv_no}{proof_icon}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-weight:700; color:#0f172a; font-size:0.85rem;'>{inv_no}{proof_icon}</div>", unsafe_allow_html=True)
             
             with c2:
-                st.markdown(f"<div style='color:#475569;'>{client}</div>", unsafe_allow_html=True)
-            
-            with c3:
                 st.markdown(status_html, unsafe_allow_html=True)
 
+            with c3:
+                st.markdown(f"<div style='color:#64748b; font-size:0.8rem;'>{event_title}</div>", unsafe_allow_html=True)
+            
             with c4:
+                st.markdown(f"<div style='color:#64748b; font-size:0.8rem;'>{venue}</div>", unsafe_allow_html=True)
+
+            with c5:
                 st.markdown(f"<div style='color:#64748b;'>{wedding_str}</div>", unsafe_allow_html=True)
             
-            with c5:
+            with c6:
                 st.markdown(f"<div style='text-align:right; font-weight:700; color:#0f172a;'>{rupiah(total)}</div>", unsafe_allow_html=True)
             
-            with c6:
+            with c7:
                 # Optimized: Use Popover to prevent vertical stacking on mobile
                 with st.popover("⚙️", use_container_width=True):
                     # Edit
@@ -237,6 +264,26 @@ def render_page():
                     # PDF
                     if st.button("📄 Generate PDF", key=f"gen_{inv_id}", use_container_width=True):
                         _handle_reprint(inv_id)
+                    
+                    # ICS Calendar — Direct Download
+                    try:
+                        from modules.ics_generator import generate_ics
+                        detail = db.get_invoice_details(inv_id)
+                        if detail:
+                            payload = json.loads(detail["invoice_data"])
+                            ics_meta = payload.get("meta", {})
+                            ics_content = generate_ics(ics_meta, grand_total=total)
+                            if ics_content:
+                                st.download_button(
+                                    "📅 Download Calendar",
+                                    data=ics_content,
+                                    file_name=f"event_{inv_no.replace('/', '_')}.ics",
+                                    mime="text/calendar",
+                                    key=f"dl_ics_{inv_id}",
+                                    use_container_width=True
+                                )
+                    except Exception:
+                        pass
                         
                     # WhatsApp Share
                     phone_raw = inv.get("client_phone")
@@ -294,40 +341,12 @@ def _handle_edit(invoice_id: int):
         st.session_state["inv_client_phone"] = meta.get("client_phone", "")  # Backward compatible
         st.session_state["inv_client_email"] = meta.get("client_email", "")
         st.session_state["inv_venue"] = meta.get("venue", "")
+        st.session_state["inv_hours"] = meta.get("hours", "")
+        st.session_state["inv_notes"] = meta.get("notes", "")
         
-        # Handle date parsing (try multiple formats with locale enforcement)
-        try:
-            w_date_str = meta.get("wedding_date", "")
-            if w_date_str:
-                import locale
-                # Save current locale and set to C/English for parsing
-                try:
-                    saved_locale = locale.getlocale(locale.LC_TIME)
-                    locale.setlocale(locale.LC_TIME, 'C')
-                except:
-                    saved_locale = None
-                
-                parsed = None
-                # Try formats in order
-                for fmt in ["%A, %d %B %Y", "%d %B %Y", "%Y-%m-%d"]:
-                    try:
-                        parsed = datetime.strptime(w_date_str, fmt).date()
-                        break
-                    except ValueError:
-                        continue
-                
-                # Restore locale
-                if saved_locale:
-                    try:
-                        locale.setlocale(locale.LC_TIME, saved_locale)
-                    except:
-                        pass
-                
-                if parsed:
-                    st.session_state["inv_wedding_date"] = parsed
-        except Exception as e:
-            print(f"[DEBUG] Date parse error: {e}")
-            
+        # Date is now simple text (no parsing needed)
+        st.session_state["inv_wedding_date"] = meta.get("wedding_date", "")
+        
         st.session_state["inv_cashback"] = float(meta.get("cashback", 0))
         
         # Restore payment terms - backward compatible
@@ -348,10 +367,23 @@ def _handle_edit(invoice_id: int):
                 if t.get("locked") or t.get("amount", 0) > 0
             ]
         
-        st.session_state["inv_terms"] = meta.get("terms", "")
-        st.session_state["bank_nm"] = meta.get("bank_name", "")
-        st.session_state["bank_ac"] = meta.get("bank_acc", "")
-        st.session_state["bank_an"] = meta.get("bank_holder", "")
+        # Helper: Get defaults (cached) to fill in missing legacy data
+        from modules.invoice_state import load_db_settings
+        db_defaults = load_db_settings()
+        
+        # Restore with Fallback to Default if Empty
+        st.session_state["inv_terms"] = meta.get("terms") or db_defaults["terms"]
+        st.session_state["bank_nm"] = meta.get("bank_name") or db_defaults["bank_nm"]
+        st.session_state["bank_ac"] = meta.get("bank_acc") or db_defaults["bank_ac"]
+        st.session_state["bank_an"] = meta.get("bank_holder") or db_defaults["bank_an"]
+        
+        st.session_state["inv_footer"] = meta.get("footer") or db_defaults["inv_footer"]
+        
+        # Fix WA Template fallback (not in main load_db_settings keys usually)
+        wa_tmpl = meta.get("wa_template")
+        if not wa_tmpl:
+             wa_tmpl = db.get_config("wa_template_default") # Fetch if missing
+        st.session_state["wa_template"] = wa_tmpl
         
         # Payment Proof (Normalize to List)
         pp_data = meta.get("payment_proof")
