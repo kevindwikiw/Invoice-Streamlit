@@ -71,24 +71,8 @@ def render_page():
     with f2:
         limit = st.selectbox("Show", [10, 25, 50], index=0, label_visibility="collapsed")
     with f3:
-        # Subscription Calendar Download
-        if st.button("📅 Subscribe Calendar", use_container_width=True, help="Download all events as .ics"):
-            try:
-                from modules.ics_generator import generate_subscription_ics
-                all_invs = db.get_invoices(limit=500)
-                events = []
-                for inv in all_invs:
-                    detail = db.get_invoice_details(inv["id"])
-                    if detail:
-                        payload = json.loads(detail["invoice_data"])
-                        events.append({"meta": payload.get("meta", {}), "grand_total": inv.get("total_amount", 0)})
-                ics_data = generate_subscription_ics(events)
-                st.session_state["_sub_ics"] = ics_data
-            except Exception as e:
-                st.error(f"Error: {e}")
-        
-        if "_sub_ics" in st.session_state:
-            st.download_button("⬇️ Download Calendar", data=st.session_state["_sub_ics"], file_name="orbit_events.ics", mime="text/calendar", key="dl_sub_ics", use_container_width=True)
+        # Subscription Calendar removed as per user request
+        st.write("")
 
     # --- Load Data ---
     if search_q:
@@ -100,13 +84,14 @@ def render_page():
         st.info("📭 No invoices found. Start by creating your first invoice!")
         return
 
-    # --- Stats Calculation ---
+    # --- Stats Calculation (ALL invoices, not just displayed) ---
+    all_invoices = db.get_invoices(limit=2000) if not search_q else invoices
     total_revenue = 0
     cnt_lunas = 0
     cnt_dp = 0
     cnt_unpaid = 0
 
-    for inv in invoices:
+    for inv in all_invoices:
         total_revenue += inv.get("total_amount", 0)
         
         # Determine Status for Counting
@@ -143,7 +128,7 @@ def render_page():
         f'<div style="display:flex; flex-wrap:wrap; gap:16px; padding:16px 20px; background:#f8fafc; border-radius:12px; margin:16px 0; align-items: center; border:1px solid #e2e8f0;">'
         f'    <div style="min-width: 80px;">'
         f'        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; font-weight:600; letter-spacing:0.5px;">Total</div>'
-        f'        <div style="font-size:1.3rem; font-weight:800; color:#0f172a;">{len(invoices)}</div>'
+        f'        <div style="font-size:1.3rem; font-weight:800; color:#0f172a;">{len(all_invoices)}</div>'
         f'    </div>'
         f'    <div style="width: 1px; height: 36px; background: #cbd5e1;"></div>'
         f'    <div style="min-width: 60px;">'
