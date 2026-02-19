@@ -114,21 +114,27 @@ def render_event_metadata() -> None:
 
     # --- HELPER: Time Parsing ---
     def _parse_time_str(time_str: str):
-        """Returns (start_time, end_time) objects."""
-        # Default: 08:00 - 14:00
-        def_start = time(8, 0)
-        def_end = time(14, 0)
+        """Returns (start_time, end_time) objects. Supports 12h & 24h."""
+        # Default: 00:00 (Midnight) indicates 'not set'
+        def_t = time(0, 0)
         
-        if not time_str or "-" not in time_str:
-            return def_start, def_end
+        if not time_str or "-" in time_str and len(time_str) < 5:
+            return def_t, def_t
             
         try:
             p1, p2 = time_str.split("-")
-            t1 = datetime.strptime(p1.strip(), "%I:%M %p").time()
-            t2 = datetime.strptime(p2.strip(), "%I:%M %p").time()
+            p1, p2 = p1.strip(), p2.strip()
+            # Try 24h first
+            try:
+                t1 = datetime.strptime(p1, "%H:%M").time()
+                t2 = datetime.strptime(p2, "%H:%M").time()
+            except ValueError:
+                # Fallback to 12h
+                t1 = datetime.strptime(p1, "%I:%M %p").time()
+                t2 = datetime.strptime(p2, "%I:%M %p").time()
             return t1, t2
         except:
-            return def_start, def_end
+            return def_t, def_t
 
     # Use a container for better grouping
     with st.container():
@@ -203,34 +209,33 @@ def render_event_metadata() -> None:
             
             st.session_state["inv_wedding_date"] = new_date_str
 
-        # TIME PICKER (with optional toggle)
+        # TIME PICKER (Dual 24h inputs)
         with c_time:
-            # Label row with inline toggle — vertically aligned
-            lt1, lt2 = st.columns([3, 1], vertical_alignment="center")
-            with lt1:
-                st.markdown('<div style="font-size:14px; color:#31333F;">Event Hours <span style="color:rgba(49,51,63,0.6);">(Optional)</span></div>', unsafe_allow_html=True)
-            with lt2:
-                curr_time_str = st.session_state.get("inv_hours", "")
-                has_time = bool(curr_time_str) and curr_time_str != "-"
-                use_time = st.checkbox("On", value=has_time, key="wh_toggle", label_visibility="collapsed")
+            # Common Label
+            st.markdown('<div style="font-size:14px; color:#31333F; margin-bottom:0.5rem;">Event Hours <span style="color:rgba(49,51,63,0.6);">(Optional)</span></div>', unsafe_allow_html=True)
             
-            if use_time:
-                t_start_val, t_end_val = _parse_time_str(curr_time_str)
-                ct1, ct2, ct3 = st.columns([1, 1, 0.6])
-                with ct1:
-                    t_start = st.time_input("Start", value=t_start_val, key="wh_start", step=1800, label_visibility="collapsed")
-                with ct2:
-                    t_end = st.time_input("End", value=t_end_val, key="wh_end", step=1800, label_visibility="collapsed")
-                with ct3:
-                    st.write("")  # Spacer for symmetry
-                
-                # Always sync
-                new_time_str = f"{t_start.strftime('%I:%M %p')} - {t_end.strftime('%I:%M %p')}"
-                st.session_state["inv_hours"] = new_time_str
+            curr_hours = st.session_state.get("inv_hours", "")
+            t1_val, t2_val = _parse_time_str(curr_hours)
+            
+            ct1, ct2 = st.columns(2)
+            with ct1:
+                t_start = st.time_input("Start", value=t1_val, key="wh_start", step=1800, label_visibility="collapsed")
+            with ct2:
+                t_end = st.time_input("End", value=t2_val, key="wh_end", step=1800, label_visibility="collapsed")
+
+            # Validation & Saving
+            if t_start > t_end:
+                 st.caption("⚠️ :red[Start time must be earlier than End time]")
+                 new_time_str = f"{t_start.strftime('%H:%M')} - {t_end.strftime('%H:%M')}"
+            elif t_start == time(0, 0) and t_end == time(0, 0):
+                 new_time_str = "-"
+                 st.caption("ℹ️ :grey[The time fields are treated as empty when set to 00:00]")
             else:
-                # Show placeholder matching date row height
-                st.markdown('<div style="padding:8px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; color:#94a3b8; font-size:0.85rem; text-align:center;">No time set</div>', unsafe_allow_html=True)
-                st.session_state["inv_hours"] = ""
+                 new_time_str = f"{t_start.strftime('%H:%M')} - {t_end.strftime('%H:%M')}"
+                 st.caption("ℹ️ :grey[Set both times to 00:00 to clear the values]")
+            
+            st.session_state["inv_hours"] = new_time_str
+
                  
         # --- ROW 4: Notes (Full Width) ---
 
