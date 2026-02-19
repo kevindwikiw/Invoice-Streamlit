@@ -1,5 +1,6 @@
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, date, time
+import calendar
 from typing import List, Dict, Any, Tuple
 from modules import db
 from modules.utils import (
@@ -44,7 +45,15 @@ PAYMENT_STEP = 1_000_000
 try:
     from views.packages_view import CATEGORIES
 except ImportError:
-    CATEGORIES = ["Utama", "Bonus"]
+    CATEGORIES = [
+      "Wedding",
+      "Bundling Package",
+      "Prewedding",
+      "Engagement/Sangjit",
+      "Corporate/Event",
+      "Add-ons",
+      "Free / Complimentary"
+    ]
 def payment_integrity_status(
     grand_total: float,
     dp1: int,
@@ -66,39 +75,91 @@ def payment_integrity_status(
 def render_event_metadata() -> None:
     # --- Section: Event & Client ---
     st.markdown('<div class="sidebar-header"><h3>📝 Event Details</h3></div>', unsafe_allow_html=True)
-    # Spacer removed based on user feedback (too much empty space)
     
-    # Use a container for better grouping
+    # --- HELPER: Date Parsing/Construction ---
+    def _parse_date_str(date_str: str):
+        """Returns (day_index, month_index, year_index)."""
+        now = datetime.now()
+        d_idx, m_idx, y_idx = 0, now.month - 1, 1 # Defaults: Day="-", CurMonth, CurYear (idx 1)
+        
+        if not date_str:
+            return d_idx, m_idx, y_idx
+            
+        parts = date_str.split(" ")
+        # Attempt to find Month
+        months = list(calendar.month_name)[1:]
+        found_month = next((m for m in months if m in parts), None)
+        if found_month:
+            m_idx = months.index(found_month)
+            
+        # Attempt to find Year (4 digits)
+        import re
+        y_match = re.search(r'\d{4}', date_str)
+        current_year = now.year
+        years = [current_year - 1] + [current_year + i for i in range(6)]
+        if y_match:
+            y_val = int(y_match.group(0))
+            if y_val in years:
+                y_idx = years.index(y_val)
+        
+        # Attempt to find Day (1-2 digits, not year)
+        # Look for digits that are NOT the year
+        d_match = re.search(r'\b(\d{1,2})\b', date_str.replace(str(y_match.group(0)) if y_match else "", ""))
+        if d_match:
+            d_val = int(d_match.group(1))
+            if 1 <= d_val <= 31:
+                d_idx = d_val # Index matches value since 0 is "-"
+                
+        return d_idx, m_idx, y_idx
+
+    # --- HELPER: Time Parsing ---
+    def _parse_time_str(time_str: str):
+        """Returns (start_time, end_time) objects."""
+        # Default: 08:00 - 14:00
+        def_start = time(8, 0)
+        def_end = time(14, 0)
+        
+        if not time_str or "-" not in time_str:
+            return def_start, def_end
+            
+        try:
+            p1, p2 = time_str.split("-")
+            t1 = datetime.strptime(p1.strip(), "%I:%M %p").time()
+            t2 = datetime.strptime(p2.strip(), "%I:%M %p").time()
+            return t1, t2
+        except:
+            return def_start, def_end
+
     # Use a container for better grouping
     with st.container():
-        # Row 1: Core Event Data
+        # --- ROW 1: Invoice Details (3 Cols) ---
         c1, c2, c3 = st.columns(3)
         with c1:
-            # Proxy Widget for Invoice Number to ensure UI reflects Session State (Fix Empty Bug)
+            # Proxy Widget for Invoice No
             def _sync_inv_no():
                 st.session_state["inv_no"] = st.session_state["inv_no_proxy"]
                 invalidate_pdf()
-
-            # Ensure we start with the canonical value
             current_inv_no = st.session_state.get("inv_no", "")
+            
             st.text_input(
                 "Invoice No", 
                 value=current_inv_no,
                 key="inv_no_proxy", 
-                placeholder="e.g. INV/2026/001", 
-                on_change=_sync_inv_no, 
-                help="To change the starting sequence (e.g. to 250), go to System Tools in the Sidebar."
+                placeholder="INV/2026/001", 
+                on_change=_sync_inv_no,
+                help="Start sequence configuration available in Sidebar > System Tools."
             )
         with c2:
-            st.date_input("Wedding Date", key="inv_wedding_date", on_change=invalidate_pdf)
+            st.text_input("Event Title :grey[(Optional)]", key="inv_title", placeholder="e.g. Wedding Reception", on_change=invalidate_pdf)
         with c3:
-            st.text_input("Venue", key="inv_venue", placeholder="e.g. Grand Ballroom Hotel Mulia", on_change=invalidate_pdf)
-        # Row 2: Client & Context
-        c4, c5, c6 = st.columns(3)
+             st.text_input("Venue :grey[(Optional)]", key="inv_venue", placeholder="e.g. Grand Ballroom", on_change=invalidate_pdf)
+
+        # --- ROW 2: Client Info (2 Cols) ---
+        c4, c5 = st.columns(2)
         with c4:
-             st.text_input("Client Name", key="inv_client_name", placeholder="e.g. Romeo & Juliet", on_change=cb_client_name_changed)
+            st.text_input("Client Name :red[*]", key="inv_client_name", placeholder="e.g. Romeo & Juliet", on_change=cb_client_name_changed)
         with c5:
-            # WhatsApp with number-only validation
+             # WhatsApp with number-only validation
             def sanitize_phone():
                 import re
                 current = st.session_state.get("inv_client_phone", "")
@@ -107,10 +168,99 @@ def render_event_metadata() -> None:
                     st.session_state["inv_client_phone"] = cleaned
                 invalidate_pdf()
             
-            st.text_input("Client WhatsApp", key="inv_client_phone", placeholder="e.g. 08123456789", on_change=sanitize_phone)
-        with c6:
-             st.text_input("Event / Title", key="inv_title", placeholder="e.g. Wedding Reception 2026", on_change=invalidate_pdf)
+            st.text_input("Client WhatsApp :grey[(Optional)]", key="inv_client_phone", placeholder="e.g. 08123456789", on_change=sanitize_phone)
+            
+        # --- ROW 3: Date & Time (2 Cols) ---
+        c_date, c_time = st.columns([1, 1])
+        
+        # DATE PICKER
+        with c_date:
+            # Emulate Streamlit Label: 14px, #31333F
+            st.markdown('<div style="font-size:14px; color:#31333F; margin-bottom:0.5rem;">Event Date <span style="color:rgba(49,51,63,0.6);">(Optional)</span></div>', unsafe_allow_html=True)
+            cd1, cd2, cd3 = st.columns([0.8, 1.4, 1.0])
+            
+            # Prepare Data
+            curr_date_str = st.session_state.get("inv_wedding_date", "")
+            d_idx, m_idx, y_idx = _parse_date_str(curr_date_str)
+            
+            days = ["-"] + [str(i) for i in range(1, 32)]
+            months = list(calendar.month_name)[1:]
+            current_year = datetime.now().year
+            years = [current_year - 1] + [current_year + i for i in range(6)]
+            
+            # Widgets
+            with cd1:
+                sel_day = st.selectbox("Day", days, index=d_idx, key="wd_day", label_visibility="collapsed")
+            with cd2:
+                sel_month = st.selectbox("Month", months, index=m_idx, key="wd_month", label_visibility="collapsed")
+            with cd3:
+                sel_year = st.selectbox("Year", years, index=y_idx, key="wd_year", label_visibility="collapsed")
+                
+            # Construct & Save — ALWAYS sync (even if unchanged, ensures defaults persist)
+            new_date_str = f"{sel_month} {sel_year}"
+            if sel_day != "-":
+                new_date_str = f"{sel_day} {sel_month} {sel_year}"
+            
+            st.session_state["inv_wedding_date"] = new_date_str
+
+        # TIME PICKER (with optional toggle)
+        with c_time:
+            # Label row with inline toggle — vertically aligned
+            lt1, lt2 = st.columns([3, 1], vertical_alignment="center")
+            with lt1:
+                st.markdown('<div style="font-size:14px; color:#31333F;">Event Hours <span style="color:rgba(49,51,63,0.6);">(Optional)</span></div>', unsafe_allow_html=True)
+            with lt2:
+                curr_time_str = st.session_state.get("inv_hours", "")
+                has_time = bool(curr_time_str) and curr_time_str != "-"
+                use_time = st.checkbox("On", value=has_time, key="wh_toggle", label_visibility="collapsed")
+            
+            if use_time:
+                t_start_val, t_end_val = _parse_time_str(curr_time_str)
+                ct1, ct2, ct3 = st.columns([1, 1, 0.6])
+                with ct1:
+                    t_start = st.time_input("Start", value=t_start_val, key="wh_start", step=1800, label_visibility="collapsed")
+                with ct2:
+                    t_end = st.time_input("End", value=t_end_val, key="wh_end", step=1800, label_visibility="collapsed")
+                with ct3:
+                    st.write("")  # Spacer for symmetry
+                
+                # Always sync
+                new_time_str = f"{t_start.strftime('%I:%M %p')} - {t_end.strftime('%I:%M %p')}"
+                st.session_state["inv_hours"] = new_time_str
+            else:
+                # Show placeholder matching date row height
+                st.markdown('<div style="padding:8px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; color:#94a3b8; font-size:0.85rem; text-align:center;">No time set</div>', unsafe_allow_html=True)
+                st.session_state["inv_hours"] = ""
+                 
+        # --- ROW 4: Notes (Full Width) ---
+
     
+    # --- ROW 4: Notes (Full Width) ---
+    st.caption("Notes (Optional)")
+    st.text_area(
+        "Notes", 
+        key="inv_notes", 
+        height=68, 
+        placeholder="Additional details...", 
+        label_visibility="collapsed",
+        on_change=invalidate_pdf
+    )
+    
+    # SAVE/GENERATE BUTTON (User requested below Notes)
+    if st.button("💾 Save Event Details", help="Update variables & generate Invoice No if missing", use_container_width=True):
+         if not st.session_state.get("inv_client_name", "").strip():
+             st.error("⚠️ Client Name wajib diisi!")
+             return
+
+         current_no = st.session_state.get("inv_no", "").strip()
+         if not current_no:
+             from modules.invoice_state import generate_invoice_no
+             new_no = generate_invoice_no()
+             st.session_state["inv_no"] = new_no
+             st.toast(f"Generated: {new_no}", icon="🔢")
+         st.toast("Details Saved!", icon="✅")
+         st.rerun()
+
     st.markdown("<div style='margin-bottom:24px;'></div>", unsafe_allow_html=True)
     # Banking & WhatsApp Config (Collapsible)
     # Trick: Use a dynamic key to force reset (collapse) after save
@@ -225,7 +375,25 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
                 
                 with col_desc:
                     icon = "📦" if is_bundle else "🔹"
-                    st.markdown(f"**{icon} {item.get('Description', 'Item')}**")
+                    
+                    # Category Pill Logic
+                    cat = item.get("category", "")
+                    pill_html = ""
+                    if cat:
+                        cat_map = {
+                            "Wedding": "cat-wedding",
+                            "Bundling Package": "cat-bundling",
+                            "Prewedding": "cat-prewedding",
+                            "Engagement/Sangjit": "cat-engagement",
+                            "Corporate/Event": "cat-corporate",
+                            "Add-ons": "cat-addons",
+                            "Free / Complimentary": "cat-free"
+                        }
+                        # Inline style adjustment for vertical align
+                        c_cls = cat_map.get(cat, "main")
+                        pill_html = f'&nbsp;<span class="pkg-pill {c_cls}" style="font-size:0.6rem; padding:1px 6px; margin:0; vertical-align:middle;">{cat}</span>'
+
+                    st.markdown(f"**{icon} {item.get('Description', 'Item')}**{pill_html}", unsafe_allow_html=True)
                     
                     # Show details text (limit 2-3 lines)
                     details_text = item.get('Details', '')
@@ -236,7 +404,7 @@ def render_pos_section(subtotal: float, cashback: float, grand_total: float) -> 
                         if len(lines) > 3:
                              st.markdown(f"<div style='font-size:0.7rem; color:#9ca3af; margin-left:4px; font-style:italic;'>+ {len(lines)-3} items...</div>", unsafe_allow_html=True)
                     if is_bundle:
-                        st.caption("Bundled Item")
+                        # st.caption("Bundled Item") # Replaced by pill
                         if st.button("Unmerge", key=f"unmerge_{item_id}", help="Revert to original items"):
                             cb_unmerge_bundle(item_id)
                             st.rerun()
@@ -543,8 +711,8 @@ def render_action_buttons(subtotal: float, grand_total: float) -> None:
     #     missing_fields.append("**Event Title**")
     if not client_name:
         missing_fields.append("**Client Name**")
-    if not venue:
-        missing_fields.append("**Venue**")
+    # if not venue:
+    #     missing_fields.append("**Venue**")
     # if not client_phone:
     #     missing_fields.append("**Client WhatsApp**")
     
@@ -552,8 +720,11 @@ def render_action_buttons(subtotal: float, grand_total: float) -> None:
         st.warning(f"⚠️ Please fill in: {', '.join(missing_fields)}")
         st.button("📄 Generate Invoice PDF", type="primary", use_container_width=True, disabled=True)
     else:
+        # Floating Sticky Bottom Action Bar
+        st.markdown('<div class="sticky-bottom-actions">', unsafe_allow_html=True)
         if st.button("📄 Generate Invoice PDF", type="primary", use_container_width=True):
             action_generate_pdf(subtotal, grand_total)
+        st.markdown('</div>', unsafe_allow_html=True)
 def render_download_section() -> None:
     pdf_data = st.session_state.get("generated_pdf_bytes")
     # Clean PDF bytes validation
@@ -588,9 +759,9 @@ def render_download_section() -> None:
             # If Pelunasan is filled, it's FULL/LUNAS
             # Check if there were other terms to distinguish "Direct Full" vs "Final Payment"
             # But simpler is better: if Pelunasan > 0 -> LUNAS
-            suffix = "_LUNAS"
+            suffix = " LUNAS"
         elif has_dp:
-            suffix = "_DP"
+            suffix = " DP"
             
     except Exception:
         pass # Fallback to no suffix
