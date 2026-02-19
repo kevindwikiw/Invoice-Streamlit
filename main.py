@@ -184,10 +184,10 @@ def render_sidebar() -> str:
                     # Clear session cache so the new sequence is picked up immediately
                     st.session_state.pop("_draft_global_seq", None)
                     st.session_state.pop("inv_no", None)
+                    st.session_state.pop("inv_no_proxy", None) # Force widget refresh
                     
                     st.success(f"Sequence updated to {new_seq}. Next Invoice: INV{int(new_seq)+1:05d}")
-                    time.sleep(1.5)
-                    st.rerun()
+                    st.warning("⚠️ Mohon refresh/reload browser untuk memastikan nomor invoice terupdate.")
 
         # --- DB Status Indicator ---
         render_db_status()
