@@ -67,25 +67,55 @@ def render_page():
     # --- Filters Row ---
     f1, f2, f3 = st.columns([2, 1, 1])
     with f1:
-        search_q = st.text_input("� Search", placeholder="Invoice no or client name...", label_visibility="collapsed")
+        search_q = st.text_input("🔍 Search", placeholder="Invoice no or client name...", label_visibility="collapsed")
     with f2:
-        limit = st.selectbox("Show", [10, 25, 50], index=0, label_visibility="collapsed")
+        page_size = st.selectbox("Show", [10, 25, 50, 100], index=0, label_visibility="collapsed")
     with f3:
         # Subscription Calendar removed as per user request
         st.write("")
 
+    # Reset pagination when filters change.
+    query_key = search_q.strip().lower()
+    filter_state = (query_key, page_size)
+    if st.session_state.get("_history_filter_state") != filter_state:
+        st.session_state["_history_filter_state"] = filter_state
+        st.session_state["_history_page"] = 1
+
     # --- Load Data ---
-    if search_q:
-        invoices = db.search_invoices(search_q, limit=limit)
+    fetch_limit = 5000
+    if query_key:
+        search_fn = getattr(db, "search_invoices", db.current_db.search_invoices)
+        all_invoices = search_fn(search_q, limit=fetch_limit)
     else:
-        invoices = db.get_invoices(limit=limit)
+        all_invoices = db.get_invoices(limit=fetch_limit)
     
-    if not invoices:
+    if not all_invoices:
         st.info("📭 No invoices found. Start by creating your first invoice!")
         return
 
-    # --- Stats Calculation (ALL invoices, not just displayed) ---
-    all_invoices = db.get_invoices(limit=2000) if not search_q else invoices
+    total_items = len(all_invoices)
+    max_page = max(1, (total_items + page_size - 1) // page_size)
+    st.session_state["_history_page"] = min(st.session_state.get("_history_page", 1), max_page)
+    current_page = st.session_state["_history_page"]
+    start_idx = (current_page - 1) * page_size
+    invoices = all_invoices[start_idx:start_idx + page_size]
+
+    p1, p2, p3 = st.columns([1, 2, 1])
+    with p1:
+        if st.button("Prev", use_container_width=True, disabled=current_page <= 1):
+            st.session_state["_history_page"] -= 1
+            st.rerun()
+    with p2:
+        st.markdown(
+            f"<div style='text-align:center; color:#64748b; padding-top:.45rem;'>Page <b>{current_page}</b> / {max_page} • Total <b>{total_items}</b></div>",
+            unsafe_allow_html=True,
+        )
+    with p3:
+        if st.button("Next", use_container_width=True, disabled=current_page >= max_page):
+            st.session_state["_history_page"] += 1
+            st.rerun()
+
+    # --- Stats Calculation (ALL filtered invoices, not just displayed) ---
     total_revenue = 0
     cnt_lunas = 0
     cnt_dp = 0
