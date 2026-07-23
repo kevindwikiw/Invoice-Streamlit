@@ -1207,6 +1207,9 @@ def save_invoice(invoice_no: str, client_name: str, date_str: str, total_amount:
 def get_invoices(limit: int = 50) -> List[Dict[str, Any]]:
     return current_db.get_invoices(limit)
 
+def search_invoices(query: str, limit: int = 50) -> List[Dict[str, Any]]:
+    return current_db.search_invoices(query, limit)
+
 def get_invoice_details(invoice_id: int) -> Optional[Dict[str, Any]]:
     return current_db.get_invoice_details(invoice_id)
 
